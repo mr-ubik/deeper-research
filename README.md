@@ -35,8 +35,18 @@ start) and you're ready. Requires Claude Code v2.1.154+ with dynamic workflows
 available on your plan, the WebSearch tool, and `python3` for the post-run
 quote gate.
 
-For local development: clone this repo and launch with
-`claude --plugin-dir ./deeper-research`.
+What those commands do: a Claude Code *marketplace* is just a catalog file a
+repo can host, and this repo is its own single-plugin marketplace — the first
+command registers the catalog, the second installs the plugin from it (the
+syntax is `<plugin>@<marketplace>`; both are named `deeper-research` here).
+Installation caches a copy of the repo locally and loads the plugin in every
+session; when new versions are released, `/plugin marketplace update` picks
+them up. The commands fetch this repo over git with your credentials, so they
+work for any copy of the repo you can clone.
+
+For local development (or to skip the install machinery entirely): clone this
+repo and launch with `claude --plugin-dir ./deeper-research` — that loads your
+working copy directly, uncommitted changes included.
 
 ## Use
 
