@@ -1,2 +1,5 @@
 __pycache__/
 .DS_Store
+
+# Research runs made inside this repo (showcase/demo output ships as release assets, never as repo content)
+research/
