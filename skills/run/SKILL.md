@@ -114,12 +114,14 @@ launch:
   preset, `workerModel`, `verifierModel`, `reviewer` from config.
 
 Launch with the Workflow tool: `{ scriptPath: <absolute path to the frozen
-copy>, args }`. Iterate on a failed run by relaunching with `resumeFromRunId` —
-completed agents replay free from cache.
+copy>, args }` — pass `args` as a real JSON object, never a stringified one.
+Iterate on a failed run by relaunching with `resumeFromRunId` — completed
+agents replay free from cache.
 
-If the launch fails with "agent type not found: dr-search" (or dr-fetch /
-dr-verify), the session predates the plugin's agent registry — tell the user to
-start a fresh session and invoke the skill again; nothing is lost.
+If the run's search/fetch/verify agents fail with "agent type
+'deeper-research:dr-search' not found" (or dr-fetch / dr-verify), the session
+predates the plugin's agent registry — tell the user to start a fresh session
+and invoke the skill again; nothing is lost.
 
 Done when: the workflow has returned its result object.
 

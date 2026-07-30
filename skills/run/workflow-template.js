@@ -60,8 +60,9 @@ export const meta = {
 
 // ------------------------------------------------------------------ Config
 // Everything comes from args; fail fast and loudly on anything unusable so a
-// misconfigured launch dies here, not five agents in.
-const A = args || {}
+// misconfigured launch dies here, not five agents in. A stringified args
+// object (a common launcher slip) is parsed rather than rejected.
+const A = typeof args === 'string' ? JSON.parse(args) : (args || {})
 for (const k of ['question', 'runTag', 'runDir', 'pagesDir', 'runDate']) {
   if (!A[k] || typeof A[k] !== 'string') throw new Error(`args.${k} is required (string)`)
 }
@@ -94,6 +95,11 @@ const REVIEWER = A.reviewer || { type: 'claude', model: 'inherit' }
 const REVIEWER_LABEL = REVIEWER.label ||
   (REVIEWER.type === 'codex-cli' ? 'an external reviewer model' : 'an independent Claude reviewer')
 const DECOY_CLAIMS = A.decoys
+// Plugin-provided agent types are namespaced by the plugin name in the
+// session's registry.
+const T_SEARCH = 'deeper-research:dr-search'
+const T_FETCH = 'deeper-research:dr-fetch'
+const T_VERIFY = 'deeper-research:dr-verify'
 
 // ------------------------------------------------------------------ Schemas
 // Structured-output schemas: the runtime validates each agent's return against
@@ -268,7 +274,7 @@ async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
         : '') +
       `For each source give url, title, and a one-line relevance note. ` +
       `If searches fail, return an empty results array.`,
-      { label: `search:${roundLabel}:${i}`, phase: 'Search', agentType: 'dr-search', model: WORKER, effort: 'low', schema: SEARCH_SCHEMA }
+      { label: `search:${roundLabel}:${i}`, phase: 'Search', agentType: T_SEARCH, model: WORKER, effort: 'low', schema: SEARCH_SCHEMA }
     )
   ))
 
@@ -378,7 +384,7 @@ function runVotes(batch, src, si, pageFile) {
     agent(votePrompt(batch, src, vi, pageFile), {
       label: `votes s${si} v${vi} (${batch.length})`,
       phase: 'Verify',
-      agentType: 'dr-verify',
+      agentType: T_VERIFY,
       model: VERIFIER,
       effort: 'low',
       schema: BATCH_VOTES_SCHEMA,
@@ -456,7 +462,7 @@ function fetchVerifyRound(picked, siBase, roundNo) {
       `the file (e.g. grep -F); if one is not found verbatim, replace it with a passage copied from the ` +
       `file, or drop the claim if nothing on the page supports it. Set fetch_ok=false and claims=[] ` +
       `if the fetch fails or the page is unusable.`,
-      { label: `fetch:s${siBase + i}`, phase: 'Fetch', agentType: 'dr-fetch', model: WORKER, effort: 'low', schema: CLAIMS_SCHEMA }
+      { label: `fetch:s${siBase + i}`, phase: 'Fetch', agentType: T_FETCH, model: WORKER, effort: 'low', schema: CLAIMS_SCHEMA }
     ),
     (extracted, src, i) => {
       const si = siBase + i
