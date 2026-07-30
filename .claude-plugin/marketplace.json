@@ -1,0 +1,15 @@
+{
+  "name": "deeper-research",
+  "description": "Marketplace for the deeper-research plugin — grounded deep research with measured verification.",
+  "owner": {
+    "name": "Michele \"Ubik\" De Simoni",
+    "email": "ubik@ubik.tech"
+  },
+  "plugins": [
+    {
+      "name": "deeper-research",
+      "source": "./",
+      "description": "Grounded deep research: multi-angle retrieval, verbatim page archiving, claim-level verification by a decoy-calibrated verifier, adversarial review, and mechanical citation gates."
+    }
+  ]
+}
