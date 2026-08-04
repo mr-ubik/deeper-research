@@ -101,7 +101,14 @@ is decided.
 3. Copy `workflow-template.js` from this skill's directory into the run folder
    as `{RUN_ID}-deeper-research.js` — VERBATIM, no edits ever: the copy is the
    run's frozen reproducibility artifact, and all configuration travels in
-   `args`.
+   `args`. Then record the instrument's identity: read the plugin version from
+   the skill path (`.../deeper-research/<version>/skills/...`; falls back to
+   the plugin's `plugin.json`) and compute
+   `sha256sum {runsDir}/{RUN_ID}/{RUN_ID}-deeper-research.js` — these become
+   `args.pipelineVersion` and `args.templateSha256`, and the workflow stamps
+   them into `results.json` and the report's Methodology block. A run whose
+   instrument version is unknown can't be compared against later runs when a
+   pipeline bug is found.
 4. **Craft 3–5 fresh decoys** — this run, every run, no reuse: decoy detection
    is the only standing measurement of the verifier, and a reused decoy
    measures memory, not judgment. Each decoy is `{claim, quote}`: a
@@ -126,7 +133,8 @@ launch:
   `seedSources` (`[{url, title, localPath}]`, `localPath: ''` unless the user
   gave a local file), `angles` (the locked set from plan.md; omit without a
   plan and the workflow's Scope agent derives them), `blocklist`, `caps` from
-  the depth preset, `workerModel`, `verifierModel`, `reviewer` from config.
+  the depth preset, `workerModel`, `verifierModel`, `reviewer` from config,
+  `pipelineVersion` and `templateSha256` from step 3.3.
 
 Launch with the Workflow tool: `{ scriptPath: <absolute path to the frozen
 copy>, args }` — pass `args` as a real JSON object, never a stringified one.

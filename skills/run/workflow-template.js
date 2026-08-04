@@ -25,6 +25,12 @@
 //     runDir:       ABSOLUTE path to the run folder; report artifacts land here (required)
 //     pagesDir:     ABSOLUTE path to the run's pages/ dir, already created (required)
 //     runDate:      'YYYY-MM-DD' run date, used in bibliography entries (required)
+//     pipelineVersion: deeper-research plugin version that produced this run, e.g.
+//                   '0.2.0' — the launcher reads it from the plugin path or
+//                   plugin.json ('' if unknown)
+//     templateSha256: sha256 of the frozen template copy actually launched — pins
+//                   the exact instrument bytes independent of version labels;
+//                   the launcher computes it with sha256sum ('' if unknown)
 //     decoys:       [{claim, quote}] known-false calibration claims (required, >= 1;
 //                   crafted fresh per run — see the skill)
 //     brief:        locked pre-run understanding from the interview ('' if none)
@@ -79,6 +85,8 @@ const RUN_TAG = A.runTag
 const RUN_DIR = A.runDir
 const PAGES_DIR = A.pagesDir
 const RUN_DATE = A.runDate
+const PIPELINE_VERSION = A.pipelineVersion || ''
+const TEMPLATE_SHA256 = A.templateSha256 || ''
 const BRIEF = A.brief || ''
 const SEED_SOURCES = A.seedSources || []
 const ANGLES = A.angles || []
@@ -708,8 +716,10 @@ const ALL_SUP = `${VOTES_PER_CLAIM}/${VOTES_PER_CLAIM}`
 // model paraphrasing its own audit trail would defeat the point.
 function pct(x) { return x === null ? 'n/a' : Math.round(x * 100) + '%' }
 const methodologyMd = [
-  'This report was produced by an automated multi-stage research pipeline (deeper-research). ' +
-  'Procedure and measured parameters for this run:',
+  'This report was produced by an automated multi-stage research pipeline (deeper-research' +
+  (PIPELINE_VERSION ? ` v${PIPELINE_VERSION}` : '') +
+  (TEMPLATE_SHA256 ? `; template sha256 ${TEMPLATE_SHA256.slice(0, 12)}` : '') +
+  '). Procedure and measured parameters for this run:',
   '',
   SEED_SOURCES.length
     ? `- **Grounding**: the query was grounded in ${SEED_SOURCES.length} user-provided seed ` +
@@ -1090,6 +1100,7 @@ return {
   blocklist: BLOCKLIST,
   run_tag: RUN_TAG,
   run_dir: RUN_DIR,
+  pipeline: { version: PIPELINE_VERSION, template_sha256: TEMPLATE_SHA256 },
   caps: { fetch_min: FETCH_MIN, fetch_max: FETCH_MAX, fetch_min_r2: FETCH_MIN_R2, fetch_max_r2: FETCH_MAX_R2, r2_angles: R2_ANGLES, seeds: SEED_SOURCES.length, verifier: VERIFIER, verify_claims_per_source: VERIFY_CLAIMS_PER_SOURCE, votes_per_claim: VOTES_PER_CLAIM, extraction: 'uncapped, ranked by centrality' },
   models: { worker: WORKER, verifier: VERIFIER, reviewer: REVIEWER.type === 'codex-cli' ? 'codex-cli' : `claude:${REVIEWER.model || 'inherit'}` },
   rounds: {
