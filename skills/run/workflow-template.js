@@ -903,7 +903,11 @@ if (draft && draft.draft) {
     // command from a background agent is not denied — it silently runs in a
     // no-network sandbox where codex produces nothing. Hence: single line,
     // starts with the configured command, prompt staged in a file, one Bash
-    // call, never retried.
+    // call, never retried. The prompt reaches codex via stdin redirect, never
+    // "$(cat file)": a review prompt easily exceeds Linux's ~128 KiB
+    // per-argument limit, and the resulting E2BIG surfaces as exit 127 —
+    // indistinguishable from command-not-found. A redirect does not break
+    // prefix matching.
     review = await agent(
       'You are a relay: obtain an adversarial review of a report from an external reviewer model ' +
       'via the Codex CLI. Do NOT run git commands. Do NOT review the report yourself.\n\n' +
@@ -911,10 +915,11 @@ if (draft && draft.draft) {
       `markers excluded) to ${RUN_DIR}/review-prompt-${RUN_TAG}.txt with the Write tool (overwrite ` +
       'any existing content).\n' +
       `(b) Run this as ONE Bash tool call with timeout 600000 ms:\n` +
-      `${REVIEWER.command} "$(cat ${RUN_DIR}/review-prompt-${RUN_TAG}.txt)" 2>/dev/null\n` +
-      'CRITICAL: the command must stay a SINGLE LINE exactly as given — no cd, echo, variables, ' +
-      'heredocs, no combining with && or ; or |. It may take several minutes; NEVER retry it, even ' +
-      'on error or empty output.\n' +
+      `${REVIEWER.command} - < ${RUN_DIR}/review-prompt-${RUN_TAG}.txt 2>/dev/null\n` +
+      'CRITICAL: the command must stay a SINGLE LINE exactly as given — the prompt goes to the CLI ' +
+      'via the stdin redirect (NEVER "$(cat file)": large prompts exceed the per-argument limit and ' +
+      'die with exit 127); no cd, echo, variables, heredocs, no combining with && or ; or |. It may ' +
+      'take several minutes; NEVER retry it, even on error or empty output.\n' +
       `(c) Write the command's stdout verbatim to ${RUN_DIR}/review.md and return it as review with ` +
       'review_ok=true. If it printed nothing, errored, or was denied, instead write ' +
       `"REVIEW-ERROR: " plus what happened to ${RUN_DIR}/review.md, and return that string as ` +
