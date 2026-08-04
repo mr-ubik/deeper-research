@@ -15,6 +15,13 @@ workflow template.
   persisted inside the brief.
 - **Seed source** — a user-provided grounding source, ingested at the head of
   the run, verified and citable like any other source (round tag 0).
+- **Plan** — the locked pre-run scope artifact: the brief plus a hardcoded,
+  adversarially reviewed angle set, persisted as `plan.md` in a stamped run
+  folder. A run launched from a plan skips the interview and the in-pipeline
+  scope derivation.
+- **Plan reviewer** — an adversarial agent attacking the draft brief + angles
+  before launch (coverage, coherence, grounding), reading the seed documents
+  before judging. Findings are adjudicated, never blindly applied.
 - **Depth preset** — a named bundle of caps (`quick` / `standard` / `deep`)
   controlling angles, fetch budgets, rounds, and votes.
 
@@ -40,7 +47,8 @@ workflow template.
   (beyond the vote cap, split/failed votes, or quote not found); citable only
   as `[S{i}*]`.
 - **Adjudication** — the revision pass over reviewer findings: apply a finding
-  only if the ledger supports it; reviewers can overreach.
+  only if the evidence supports it (the ledger for report review, the
+  brief/seeds for plan review); reviewers can overreach.
 - **Canonical report** — the run's one official report artifact (`report.md`),
   ending with the mechanical verification appendix.
 

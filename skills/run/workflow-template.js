@@ -37,7 +37,10 @@
 //     workerModel:  model for search/fetch workers (default 'sonnet')
 //     verifierModel: model casting verification votes (default 'haiku')
 //     reviewer:     { type: 'claude', model: 'inherit'|<model>, label }
-//                   | { type: 'codex-cli', command: <single-line CLI prefix>, label }
+//                   | { type: 'codex-cli', command: <single-line CLI prefix>, label,
+//                       wrapperModel }  wrapperModel: the relay agent that stages the
+//                                       prompt and runs the CLI (default 'opus' — the
+//                                       external model does the reviewing, not the relay)
 //   }
 //
 // Artifacts the tail agents write into runDir: unreviewed_report.md, review.md,
@@ -924,7 +927,10 @@ if (draft && draft.draft) {
       'Output ONLY the review in Markdown. If you cannot complete this, say so explicitly and ' +
       'state what you inspected.\n' +
       '--- REVIEW-PROMPT END ---',
-      { label: '[codex] review', phase: 'Synthesize', schema: REVIEW_SCHEMA }
+      // The relay is mechanical (stage file, one Bash call, return stdout) — it
+      // never inherits the main-loop model; the external model does the review.
+      { label: '[codex] review', phase: 'Synthesize', schema: REVIEW_SCHEMA,
+        model: REVIEWER.wrapperModel || 'opus' }
     )
   } else {
     // Default: a fresh-context Claude reviewer. Separate context is the point —

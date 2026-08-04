@@ -12,8 +12,11 @@ verifier with planted decoys, adversarially reviews the draft, and mechanically
 checks every citation. You (the orchestrating session) own the interview, the
 launch, and the persistence; the workflow owns everything between.
 
-`$ARGUMENTS` may carry the question, seed URLs/paths, and the word `quick`
-(= skip the interview, use the `quick` depth preset).
+`$ARGUMENTS` may carry the question, seed URLs/paths, the word `quick`
+(= skip the interview, use the `quick` depth preset), or a **plan reference**:
+a RUN_ID or run-folder path produced by `/deeper-research:plan`. Invoked bare,
+check whether the latest folder under `{runsDir}` holds a locked plan
+(`plan.md` present, no `report.md`) and offer to run it.
 
 ## 1. Config
 
@@ -39,12 +42,16 @@ second-model review instead:
 
 ```json
 "reviewer": { "type": "codex-cli", "label": "<reviewer model name>",
-              "command": "codex exec --skip-git-repo-check --sandbox read-only -m <model> -c model_reasoning_effort=\"high\"" }
+              "command": "codex exec --skip-git-repo-check --sandbox read-only -m <model> -c model_reasoning_effort=\"high\"",
+              "wrapperModel": "opus" }
 ```
 
 The `command` must be the exact single-line prefix their permission allowlist
-matches (see README → External reviewer). Never select `codex-cli` for a user
-who hasn't confirmed the CLI works in their environment.
+matches (see README → External reviewer). `wrapperModel` (default `opus`) is
+the model of the relay agent that stages the prompt and runs the CLI — the
+external model does the reviewing, so the relay never needs the session model.
+Never select `codex-cli` for a user who hasn't confirmed the CLI works in
+their environment.
 
 Depth presets (a config `caps` object with the same keys as the template's
 `args.caps` overrides any preset):
@@ -60,10 +67,14 @@ user just gave (which you have written back to `research/config.json`).
 
 ## 2. Brief
 
-The brief is the locked pre-run understanding between you and the user. Run a
-short grilling interview — unless the user passed `quick` or says "just run
-it", in which case the question itself is the whole brief (record depth and
-move on).
+**From a plan:** if a plan reference was given (or accepted), read `brief.md`
+and `plan.md` from its folder — the brief, depth, seeds, and the locked angle
+set are all decided; skip the interview entirely and go to step 3.
+
+**Without a plan**, the brief is the locked pre-run understanding between you
+and the user. Run a short grilling interview — unless the user passed `quick`
+or says "just run it", in which case the question itself is the whole brief
+(record depth and move on).
 
 1. **Blind questions first**, one at a time, recommendation included: What
    should the deliverable look like (survey, comparison, decision memo)? Who
@@ -81,7 +92,9 @@ is decided.
 
 ## 3. Stamp the run
 
-1. `RUN_ID=$(date +"%Y%m%d%H%M%S")`; run folder is `{runsDir}/{RUN_ID}/`.
+1. Planned run: keep the plan's folder and its RUN_ID — never re-stamp.
+   Otherwise `RUN_ID=$(date +"%Y%m%d%H%M%S")`; run folder is
+   `{runsDir}/{RUN_ID}/`.
 2. `mkdir -p {runsDir}/{RUN_ID}/pages`, and write `{runsDir}/{RUN_ID}/.gitignore`
    containing `pages/` (archived page text is bulky and stays out of version
    control; reports and ledgers stay committable).
@@ -108,10 +121,12 @@ Build the `args` object — the template's header documents every field — and
 launch:
 
 - `question`, `runTag: RUN_ID`, `runDir`/`pagesDir` as ABSOLUTE paths,
-  `runDate` (YYYY-MM-DD from RUN_ID), `decoys`, `brief` (the brief.md content,
-  `''` if waived), `seedSources` (`[{url, title, localPath}]`, `localPath: ''`
-  unless the user gave a local file), `blocklist`, `caps` from the depth
-  preset, `workerModel`, `verifierModel`, `reviewer` from config.
+  `runDate` (today's date at launch, YYYY-MM-DD — a plan may be older than its
+  launch), `decoys`, `brief` (the brief.md content, `''` if waived),
+  `seedSources` (`[{url, title, localPath}]`, `localPath: ''` unless the user
+  gave a local file), `angles` (the locked set from plan.md; omit without a
+  plan and the workflow's Scope agent derives them), `blocklist`, `caps` from
+  the depth preset, `workerModel`, `verifierModel`, `reviewer` from config.
 
 Launch with the Workflow tool: `{ scriptPath: <absolute path to the frozen
 copy>, args }` — pass `args` as a real JSON object, never a stringified one.

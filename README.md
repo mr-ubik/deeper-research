@@ -50,16 +50,42 @@ working copy directly, uncommitted changes included.
 
 ## Use
 
+Two skills. `plan` locks the scope of a run under adversarial review; `run`
+executes it. Planning is optional — `run` on its own still interviews you and
+derives search angles in-pipeline — but angle quality bounds what the run can
+retrieve, and planning is the only stage where a bad decomposition is cheap to
+fix.
+
+```
+/deeper-research:plan How do the major vector databases handle index rebuilds under sustained writes?
+/deeper-research:run 20260730143000        # execute the locked plan
+```
+
+or, skipping the planning stage:
+
 ```
 /deeper-research:run How do the major vector databases handle index rebuilds under sustained writes?
 ```
 
-What happens:
+What `plan` does:
 
-1. **Brief** — a short interview (one question at a time): deliverable shape,
-   audience, constraints, non-goals, seed sources, depth. Your answers are
-   locked into a `brief.md` the pipeline honors. Add `quick` to your invocation
-   to skip the interview and run small.
+1. **Interview** — grills you on scope (invoking your own grilling skill if
+   you have one installed): deliverable shape, audience, constraints,
+   non-goals, seed sources, depth.
+2. **Draft** — a brief plus the full search-angle set, drafted from your
+   answers and the seed documents.
+3. **Adversarial review** — each configured plan reviewer independently
+   attacks the draft (coverage gaps, overlapping angles, ambiguities,
+   conflicts with the seeds), having read the seed documents first. Findings
+   are adjudicated — applied only when the evidence supports them — surviving
+   questions come back to you, and the result is locked into `brief.md` +
+   `plan.md` in a stamped run folder.
+
+What `run` does:
+
+1. **Brief** — reads the plan if you pass one; otherwise a short interview
+   locks a `brief.md` the pipeline honors. Add `quick` to your invocation to
+   skip the interview and run small.
 2. **Run** — a background workflow fans out search angles, archives and
    claim-extracts each source, verifies claims with independent page-grounded
    votes (with planted decoys measuring the verifier), analyzes gaps, retrieves
@@ -74,6 +100,7 @@ research/
 └── 20260730143000/
     ├── report.md            # the deliverable (ends with a per-claim verification appendix)
     ├── brief.md             # the locked pre-run understanding
+    ├── plan.md              # locked angles + adjudicated review findings (planned runs only)
     ├── results.json         # full structured run record (ledger, votes, calibration, checks)
     ├── unreviewed_report.md # draft before adversarial review
     ├── review.md            # the adversarial review
@@ -111,19 +138,29 @@ run and hand-editable after:
   reliability instead of assuming it.
 - **reviewer** — who adversarially reviews the draft. Default: the session's
   model in a fresh context (a reviewer that never saw the author's reasoning).
+- **planReviewers** — the panel that attacks a plan before launch (an array;
+  each entry has the same shape as `reviewer`). Default when absent:
+  `[{ "type": "claude", "model": "inherit" }]`. Append a `codex-cli` entry for
+  a two-model panel — different model families have different blind spots.
 
 ### External reviewer (optional)
 
 If you use the OpenAI Codex CLI, a second model family can review instead —
-different models have different blind spots:
+different models have different blind spots. The same shape works as a
+`planReviewers` entry:
 
 ```json
 "reviewer": {
   "type": "codex-cli",
   "label": "gpt-5.6-sol",
-  "command": "codex exec --skip-git-repo-check --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=\"high\""
+  "command": "codex exec --skip-git-repo-check --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=\"high\"",
+  "wrapperModel": "opus"
 }
 ```
+
+`wrapperModel` sets the relay agent that stages the prompt and runs the CLI
+(default `opus`): the external model does the reviewing, so the relay is
+deliberately not the session model.
 
 Add a matching prefix rule to your permission allowlist (e.g.
 `Bash(codex exec --skip-git-repo-check --sandbox read-only *)` in
