@@ -54,12 +54,14 @@ def quote_on_page(quote: str, page: str) -> str:
 
     The page must arrive pre-normalized. Extractors splice discontiguous page
     fragments with '...'; treat each fragment as an independent verbatim
-    requirement (fragments of <=3 words are ignored — too short to be
-    evidence on their own). 'lenient' means found only after dehyphenating
-    both sides (PDF hyphenation artifacts).
+    requirement. Fragments too short to be evidence on their own are ignored —
+    but shortness is measured in words AND characters: a code one-liner, URL,
+    or identifier has few whitespace-separated words yet is highly specific,
+    so a long fragment is kept regardless of its word count. 'lenient' means
+    found only after dehyphenating both sides (PDF hyphenation artifacts).
     """
     fragments = [f.strip(" .,;:") for f in re.split(r"\.{3,}", normalize(quote))]
-    fragments = [f for f in fragments if len(f.split()) > 3]
+    fragments = [f for f in fragments if len(f.split()) > 3 or len(f) >= 20]
     if not fragments:
         return "absent"
     if all(f in page for f in fragments):
