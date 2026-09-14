@@ -1,7 +1,7 @@
 # deeper-research instrument v0.3.0 — frozen 2026-09-14
 # One sha256 per instrument file, then one over the list of file hashes.
 # Regenerate: sha256sum <files> ; sha256sum <files> | sha256sum
-b82d1eaf616853ec4606796dc945ec84935cfbcf3e077b78b10e1adaf37e739d  skills/run/workflow-template.js
+b6a73e4b9525cab4b16f2c89bbebc5b4e3e5ad850ed4403b13867b856f6f48e8  skills/run/workflow-template.js
 fc52ca9a42179feceda1668a86fdc59419199f7704bc2ba48e40dc5d2335d9de  skills/run/scripts/check-quotes.py
 3a105fdcc06b0c65fef9cffa0a91995d7c6853f878032c2c3f1c2235f227555f  skills/run/scripts/check-report.py
 50eb329851061c073b97e0bd30dddea8cdac5cbedd2374e327f1980da3bfb369  skills/run/scripts/assemble-report.py
@@ -11,4 +11,4 @@ e598adac5251233814994f7637404a3fd29969c91c0cd65220bf800da23015fc  agents/dr-veri
 0d711880266fa72f5000dedf93c3002c60c319150c7e3fee98986112c4939eb2  skills/run/SKILL.md
 bd40c30ace7078dd27aac717ce8abd3156db544ddd4054d75d357975dab599f8  skills/plan/SKILL.md
 # set:
-b0b6b966986c97bb33e271731f5bc24e1d9a62109aeef5748221ba566992921e  -
+a617e9f6d0a17cafdb65c2281c8618919c5143c756b240e63de80c7ea337c7bb  -
