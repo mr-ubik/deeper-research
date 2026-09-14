@@ -10,6 +10,23 @@ from pathlib import Path
 from score import HEADER
 
 
+def parse_row(line):
+    '''Parse one CSV line; repair an unterminated quoted last field.
+
+    Judges sometimes end a quoted evidence note with two double quotes
+    instead of three (one closing quote short), which a strict parser
+    rejects and which would silently drop a real verdict. An odd number of
+    double quotes on the line is exactly that slip, so one closing quote is
+    appended before parsing.
+    '''
+    if line.count('"') % 2 == 1:
+        line += '"'
+    try:
+        return next(csv.reader([line], skipinitialspace=True, strict=True))
+    except (csv.Error, StopIteration):
+        return None
+
+
 def collect(manifest, outputs, out):
     outputs = Path(outputs)
     kept, summaries = [], []
@@ -27,9 +44,8 @@ def collect(manifest, outputs, out):
             line = line.strip()
             if not line or line.startswith(("```", "~~~")):
                 continue
-            try:
-                row = next(csv.reader([line], skipinitialspace=True, strict=True))
-            except (csv.Error, StopIteration):
+            row = parse_row(line)
+            if row is None:
                 continue
             if len(row) != len(HEADER):
                 continue

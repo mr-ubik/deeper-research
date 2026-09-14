@@ -300,7 +300,7 @@ class CollectTests(HarnessCase):
                 'R,Q,M1,foreign,supported,gpt,"wrong item"\n'
                 'another,Q,M1,s.003,supported,gpt,"wrong run"\n'
                 'R,another,M1,s.003,supported,gpt,"wrong question"\n'
-                'R,Q,M1,s.003,supported,gpt,"unterminated\n```\n')
+                'R,Q,M1,s.003,supported,gpt\n```\n')  # 6 fields: malformed, dropped
         code, rows, stdout, stderr = self.run_collect(["s.001", "s.002", "s.003"], text)
         self.assertEqual(code, 0)
         self.assertEqual([r[3] for r in rows], ["s.001", "s.002"])
@@ -402,6 +402,27 @@ class OrchestratorTests(HarnessCase):
         self.assertIn("synthetic judge failure", failures["m1-2.md"]["reason"])
         self.assertTrue((self.root / "out" / "judge-outputs" / "m3m4.txt").exists())
 
+
+class ParseRowRepairTests(unittest.TestCase):
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("collect_mod", Path(__file__).resolve().parents[1] / "collect.py")
+        self.collect = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.collect)
+
+    def test_repairs_one_missing_closing_quote(self):
+        # Real judge slip (2026-09-14 calibration): note ends with `.""` not `."""`.
+        line = 'r,q,M1,plant.m1-2.verbatim,supported,gpt,"The source states: ""Under packet conditions.""'
+        row = self.collect.parse_row(line)
+        self.assertEqual(row[3], "plant.m1-2.verbatim")
+        self.assertEqual(row[6], 'The source states: "Under packet conditions."')
+
+    def test_well_formed_line_unchanged(self):
+        line = 'r,q,M1,s.001,partial,gpt,"He said ""no"" twice."'
+        self.assertEqual(self.collect.parse_row(line)[6], 'He said "no" twice.')
+
+    def test_hopeless_line_is_none(self):
+        self.assertIsNone(self.collect.parse_row('"a,"b"c",d"'))
 
 if __name__ == "__main__":
     unittest.main()

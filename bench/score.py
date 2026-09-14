@@ -121,6 +121,9 @@ def score(checklist, rows, plants, meta):
             if item not in conclusions:
                 raise ScoreError(f"unknown M4 conclusion id: {item!r}")
             result["m4"][verdict] += 1
+    if not nonplant_metrics:
+        # An empty verdict set must never score as "zero everywhere, exit 0".
+        raise ScoreError("REFUSED: no verdict rows for this run (judge outputs missing?)", raw=True)
     missing = sorted(nonplant_metrics - plant_metrics)
     if missing:
         raise ScoreError(f"REFUSED: metric {missing[0]} has no calibration plants", raw=True)

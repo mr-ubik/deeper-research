@@ -33,9 +33,15 @@ Progress (2026-09-14, end of first session):
   output), `PROTOCOL.md`, and the judge harness (`sample_m1`,
   `fetch_sources`, `make_batches`, `collect`, `judge_run`; written by
   gpt-6-astra via pi, reviewed, dry-run on run 20260914144206).
-- NOT done: a live judge calibration pass (one real judge_run on a test
-  report to measure plant detection before any baseline); question
-  checklists q1–q4 (human). benchmark-plan.md: disregarded per the human.
+- Live judge calibration pass done (research/harness-cal, gpt-6-astra via
+  pi): 15/15 plants detected, 29/29 rows collected. It exposed three
+  harness defects, all fixed with tests: judge.py extracted no text from
+  pi's real event shapes (now reads assistant message_end blocks, plus a
+  --from-events recovery), score.py scored an empty verdict set as zero
+  with exit 0 (now refuses), collect.py dropped rows with a one-quote-short
+  note (now repairs an odd quote count).
+- NOT done: question checklists q1–q4 (human). benchmark-plan.md:
+  disregarded per the human.
 Supersedes the F1–F6 list in the earlier handoff where the two differ.
 Register: STE. Vocabulary per `CONTEXT.md`.
 
