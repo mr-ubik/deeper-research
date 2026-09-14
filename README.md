@@ -16,7 +16,7 @@ it:
 | Claim verification | votes on claims | votes grounded in the archived page, with a mechanical quote-presence check |
 | Verifier trust | assumed | **measured every run**: known-false decoy claims are planted and the detection rate is reported |
 | Your own documents | — | seed sources: ingested, verified, and citable like any retrieved source |
-| Retrieval | one pass | two rounds — a gap analysis of round-1 evidence targets round 2 |
+| Retrieval | one pass | every search result is kept and triaged from its snippet, so the fetch budget is chosen from the whole pool; two rounds — a gap analysis of round-1 evidence targets round 2 |
 | Report | cited summary | survey register, footnote citations with verification status carried by hedged prose, adversarial review, per-claim verification appendix |
 | Checks | — | mechanical citation, methodology, and quote gates run by plain scripts after the run; failures reported, never auto-fixed |
 

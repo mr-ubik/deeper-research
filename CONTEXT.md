@@ -32,6 +32,13 @@ workflow template.
 - **Scope** — the in-pipeline derivation of search angles from question +
   brief + seeds. Exactly one deterministic angle-derivation per run.
 - **Angle** — one independent search direction; the unit of search fan-out.
+- **Search pool** — every unique candidate the round's searches produced,
+  with its search-engine snippet. Recorded in the run record; only the
+  fetched subset becomes sources in the ledger.
+- **Triage** — the snippet-level ranking of the whole search pool that
+  decides which candidates the fetch budget goes to: relevance, primary-source
+  quality, facet diversity, and near-duplicate exclusion, judged from title
+  and snippet without a fetch.
 - **Ledger** — the run's structured claims record: sources keyed `S{i}`, each
   with verified claims (with votes) and an unverified tail. The only evidence
   base synthesis may draw from. Decoys never enter it.
