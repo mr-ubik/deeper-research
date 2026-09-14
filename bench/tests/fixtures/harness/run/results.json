@@ -1,0 +1,12 @@
+{
+  "ledger": {
+    "sources": [
+      {"source": "https://example.invalid/operations"},
+      {"source": "https://example.invalid/pilot"}
+    ]
+  },
+  "results": [
+    {"page_file": "/unavailable-original-run/pages/operations.txt"},
+    {"page_file": "/unavailable-original-run/pages/pilot.txt"}
+  ]
+}

@@ -1,0 +1,5 @@
+[
+  {"item_id": "s.001", "sentence": "Electric buses eliminate local tailpipe emissions while carrying passengers along established routes throughout the city every weekday.", "context": "The city is considering new vehicles.", "labels": ["1"], "urls": ["https://example.invalid/operations"]},
+  {"item_id": "s.002", "sentence": "A route-specific pilot gives operators practical evidence about winter energy consumption and reliable charging needs.", "context": "Routes require careful evaluation.", "labels": ["2"], "urls": ["https://example.invalid/pilot"]},
+  {"item_id": "s.003", "sentence": "Long-term costs depend on local electricity prices and maintenance contracts rather than vehicle purchase prices alone.", "context": "Procurement should include charging infrastructure.", "labels": ["1", "3"], "urls": ["https://example.invalid/operations", "https://example.invalid/cost"]}
+]
