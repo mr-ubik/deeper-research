@@ -308,10 +308,11 @@ const allFound = []
 
 // One round of search fan-out: one worker per angle, then dedup + blocklist +
 // snippet triage (re-rank) + cap. The workers return EVERY result their
-// searches produced, with the engine's snippet: a search already paid for ten
-// results per query, and a snippet is enough to judge relevance, recency, and
-// modality without a fetch. Keeping only a worker's top 3 threw that breadth
-// away before anything could rank it. Re-ranking the whole pool before the
+// searches produced, with whatever the tool showed about each (a snippet when
+// the engine gives one, else the worker's note): a search already paid for ten
+// results per query, and title plus a line of context is enough to judge
+// relevance, recency, and modality without a fetch. Keeping only a worker's
+// top 3 threw that breadth away before anything could rank it. Re-ranking the whole pool before the
 // cap matters: without it the fetch budget goes to whatever was discovered
 // first, an arbitrary selection at exactly the point where recall is decided.
 // The cap is quality-adaptive: the ranker certifies how many candidates are
@@ -333,9 +334,12 @@ async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
         ? `Exclude any source whose URL contains "${BLOCKLIST.join('" or "')}", and any source that primarily ` +
           `summarizes or discusses content from those domains. `
         : '') +
-      `For each result give url, title, snippet (the search engine's snippet text VERBATIM, "" if ` +
-      `none), and a one-line relevance note of your own (name the source modality and flag ` +
-      `aggregators or SEO content farms as such rather than omitting them). ` +
+      `For each result give url, title, snippet, and relevance. snippet = whatever the search tool ` +
+      `showed ABOUT THAT PAGE beyond its title, copied VERBATIM (the engine's snippet if it gives one, ` +
+      `or the sentence of the tool's summary that refers to that page); "" when the tool listed only ` +
+      `a title and URL — never write a snippet yourself. relevance = a one-line note of your own: the ` +
+      `source modality, what the page appears to cover, and a flag for aggregators or SEO content ` +
+      `farms (flag them, do not omit them). ` +
       `If searches fail, return an empty results array.`,
       { label: `search:${roundLabel}:${i}`, phase: 'Search', agentType: T_SEARCH, model: WORKER, effort: 'low', schema: SEARCH_SCHEMA }
     )
@@ -364,8 +368,9 @@ async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
       `Below are ${fresh.length} candidate sources found by parallel searches on different angles of ` +
       `the question, each with its search-engine snippet. Between ${fetchMin} and ` +
       `${Math.min(fetchMax, fresh.length)} of them will be fetched and read — how many depends on ` +
-      `YOUR quality call — so the ranking decides coverage. Judge from the snippet and title: they ` +
-      `are enough to tell relevance, recency, and modality.\n\n` +
+      `YOUR quality call — so the ranking decides coverage. Judge from the title, the snippet where ` +
+      `one is present, and the search worker's note: together they are enough to tell relevance, ` +
+      `recency, and modality without a fetch.\n\n` +
       fresh.map((s, i) => `[${i}] ${s.url}\n    title: ${s.title}\n    snippet: ${(s.snippet || '').slice(0, 400)}\n    note: ${s.relevance}`).join('\n') +
       `\n\nRank ALL indices best-first by: (a) direct relevance to the research question, ` +
       `(b) primary literature over secondary commentary, (c) diversity — the fetched set together ` +
@@ -406,7 +411,7 @@ async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
       : Math.min(fetchMin, fresh.length)
     picked = order.slice(0, take).map(i => fresh[i])
     dropped = order.slice(take).map(i => fresh[i])
-    log(`Triage (${roundLabel}): ${fresh.length} candidates from snippets, fetching ${take} (${reranked ? `ranker certified ${highQuality} high-quality, ${dupes.size} near-duplicates, bounds [${fetchMin}, ${fetchMax}]` : 'RERANK FAILED, floor count in discovery order'}); not fetched: ${dropped.map(d => d.url).join(', ')}`)
+    log(`Triage (${roundLabel}): ${fresh.length} candidates, fetching ${take} (${reranked ? `ranker certified ${highQuality} high-quality, ${dupes.size} near-duplicates, bounds [${fetchMin}, ${fetchMax}]` : 'RERANK FAILED, floor count in discovery order'}); not fetched: ${dropped.map(d => d.url).join(', ')}`)
   } else {
     picked = fresh.slice(0, fetchMax)
     dropped = fresh.slice(fetchMax)
@@ -813,8 +818,8 @@ const methodologyMd = [
     : `- **Retrieval, round 1**: ${runAngles.length} independent search angles ` +
       `(${ANGLES.length ? 'fixed for this run' : 'derived by a scoping pass from the question and seed material'}) ` +
       `were queried in parallel; ${r1.found} unique candidates were found after deduplication and ` +
-      `blocklisting and triaged from their search snippets for relevance, primary-source quality, ` +
-      `and facet diversity` +
+      `blocklisting and triaged from their search-result titles, snippets, and worker notes for ` +
+      `relevance, primary-source quality, and facet diversity` +
       (r1.high_quality === null
         ? `; ${r1.picked.length} were fetched in full.`
         : `; the ranker certified ${r1.high_quality} candidates as high-quality and ` +
