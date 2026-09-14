@@ -42,7 +42,11 @@ def normalize(text: str) -> str:
         text = text.replace(k, v)
     # Fetch tools persist pages as Markdown; a quote copies the link TEXT, not
     # the markup, so "[write-ahead log](wal.html)" must compare as "write-ahead log".
+    # Extractors also drop or keep inline-code backticks and link brackets
+    # inconsistently ("`visibility_timeout`", "[Redis transport has to emulate
+    # it]"), so both markup characters are removed on both sides.
     text = _MD_LINK.sub(r"\1", text)
+    text = text.replace("`", "").replace("[", "").replace("]", "")
     return re.sub(r"\s+", " ", text).strip()
 
 

@@ -267,3 +267,11 @@ class ReviewFollowupTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(data["authored_appendix"], ["## Appendix A: Claims and verdicts"])
             self.assertIn("PROBLEM authored_appendix", out)
+
+    def test_quote_matches_through_inline_code_and_bracket_markup(self):
+        page = "copied back into the queue (after `visibility_timeout` seconds), whereas [Redis transport has to emulate it](https://x)."
+        self.assertEqual(quotes.quote_on_page(
+            "copied back into the queue (after visibility_timeout seconds), whereas",
+            quotes.normalize(page)), "strict")
+        self.assertEqual(quotes.quote_on_page(
+            "whereas [Redis transport has to emulate it].", quotes.normalize(page)), "strict")
