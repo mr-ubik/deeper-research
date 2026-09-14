@@ -23,9 +23,22 @@ def main():
         print("Usage: python3 assemble-report.py <run_dir>")
         return 2
     run_dir = Path(sys.argv[1])
+    try:
+        data = json.loads((run_dir / "results.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        data = None
+    # The workflow records which file it considers canonical. Honor it: a
+    # stale final_report.md from an earlier attempt must not outrank the
+    # draft the workflow actually produced this time. Without the key (older
+    # runs) fall back to "final if present, else draft".
+    candidates = (("final_report.md", "final"), ("unreviewed_report.md", "draft"))
+    recorded = data.get("report_source") if data is not None else None
+    if recorded in ("final", "draft"):
+        candidates = tuple(c for c in candidates if c[1] == recorded)
+    elif recorded == "none":
+        candidates = ()
     chosen = None
-    for name, label in (("final_report.md", "final"),
-                        ("unreviewed_report.md", "draft")):
+    for name, label in candidates:
         path = run_dir / name
         if path.exists():
             text = path.read_text()
@@ -35,10 +48,8 @@ def main():
     if chosen is None:
         print("NO-REPORT")
         return 1
-    try:
-        data = json.loads((run_dir / "results.json").read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"ERROR: {exc}")
+    if data is None:
+        print("ERROR: results.json missing or unreadable")
         return 2
     source, report_source = chosen
     appendix = data.get("appendix", "")
