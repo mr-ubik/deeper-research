@@ -16,9 +16,9 @@ it:
 | Claim verification | votes on claims | votes grounded in the archived page, with a mechanical quote-presence check |
 | Verifier trust | assumed | **measured every run**: known-false decoy claims are planted and the detection rate is reported |
 | Your own documents | — | seed sources: ingested, verified, and citable like any retrieved source |
-| Retrieval | one pass | two rounds — a gap analysis of round-1 evidence targets round 2 |
-| Report | cited summary | survey register with claim-status citation conventions, adversarial review, per-claim verification appendix |
-| Checks | — | mechanical citation, methodology, and quote gates; failures reported, never auto-fixed |
+| Retrieval | one pass | every search result is kept and triaged from its snippet, so the fetch budget is chosen from the whole pool; two rounds — a gap analysis of round-1 evidence targets round 2 |
+| Report | cited summary | survey register, footnote citations with verification status carried by hedged prose, adversarial review, per-claim verification appendix |
+| Checks | — | mechanical citation, methodology, and quote gates run by plain scripts after the run; failures reported, never auto-fixed |
 
 ## Install
 
@@ -99,9 +99,10 @@ research/
 ├── config.json              # your standing configuration
 └── 20260730143000/
     ├── report.md            # the deliverable (ends with a per-claim verification appendix)
+    ├── report_plain.md      # the same report without the Methodology section and appendix
     ├── brief.md             # the locked pre-run understanding
     ├── plan.md              # locked angles + adjudicated review findings (planned runs only)
-    ├── results.json         # full structured run record (ledger, votes, calibration, checks)
+    ├── results.json         # full structured run record (ledger, votes, calibration, methodology)
     ├── unreviewed_report.md # draft before adversarial review
     ├── review.md            # the adversarial review
     ├── final_report.md      # draft after adjudicated revision
@@ -145,29 +146,37 @@ run and hand-editable after:
 
 ### External reviewer (optional)
 
-If you use the OpenAI Codex CLI, a second model family can review instead —
-different models have different blind spots. The same shape works as a
-`planReviewers` entry:
+A second model family can review instead — different models have different
+blind spots. Any command-line agent that reads a prompt from a file works;
+the `pi` coding agent on the Codex subscription is the leanest relay we have
+measured (about 700 tokens of overhead per call):
 
 ```json
 "reviewer": {
-  "type": "codex-cli",
+  "type": "cli",
   "label": "gpt-5.6-sol",
-  "command": "codex exec --skip-git-repo-check --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=\"high\"",
-  "wrapperModel": "opus"
+  "command": "pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking high --model openai-codex/gpt-5.6-sol @{prompt}",
+  "wrapperModel": "sonnet"
 }
 ```
 
+`command` is one line with a `{prompt}` placeholder: the relay replaces it
+with the staged prompt file's path and redirects stdout into `review.md`.
+For the OpenAI Codex CLI use
+`codex exec --skip-git-repo-check --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=\"high\" - < {prompt}`
+(the legacy `"type": "codex-cli"` with a bare prefix still works). The same
+shape works as a `planReviewers` entry.
+
 `wrapperModel` sets the relay agent that stages the prompt and runs the CLI
-(default `opus`): the external model does the reviewing, so the relay is
-deliberately not the session model.
+(default: the worker model): the external model does the reviewing, so the
+relay is deliberately cheap.
 
 Add a matching prefix rule to your permission allowlist (e.g.
-`Bash(codex exec --skip-git-repo-check --sandbox read-only *)` in
-`.claude/settings.json`) — permission rules are prefix rules, and the review
-call is made non-interactively from a background agent, so an unlisted command
-cannot prompt you and the review degrades to the unreviewed draft. Only enable
-this if `codex exec` already works in your environment.
+`Bash(pi -p *)` or `Bash(codex exec --skip-git-repo-check --sandbox read-only *)`
+in `.claude/settings.json`) — permission rules are prefix rules, and the
+review call is made non-interactively from a background agent, so an unlisted
+command cannot prompt you and the review degrades to the unreviewed draft.
+Only enable this if the command already works in your environment.
 
 ## Trust model
 
@@ -180,10 +189,12 @@ weakest links instead of asserting them.
 - **Decoy calibration.** Every run plants known-false claims with fabricated
   quotes among the real ones. The report's Methodology section states the
   detection rate. An unmeasured verifier is untrusted.
-- **Status-carrying citations.** A plain `[S3]` cite means fully supported
-  votes; `[S3*]` marks an unverified lead; an uncited substantive sentence is
-  explicitly authorial judgment. The reader always knows which register a
-  sentence is in.
+- **Footnoted sources, hedged prose.** Every ledger-derived statement carries
+  a Markdown footnote to its source; how well it was verified is stated in
+  the sentence itself (a claim with full supported votes reads plainly, an
+  unverified lead reads as one), and an uncited substantive sentence is
+  explicitly authorial judgment. The reviewer polices the hedging against
+  the ledger, and a script checks the footnote wiring.
 - **Adversarial review, adjudicated.** A separate context reviews the draft
   against the evidence ledger; the adjudicator applies only findings the
   ledger supports — reviewers overreach too.
