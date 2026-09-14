@@ -39,27 +39,44 @@
 //     nAngles:      how many angles Scope should derive (when angles is [])
 //     blocklist:    URL substrings to exclude from search results ([])
 //     caps:         { fetchMin, fetchMax, r2Angles, fetchMinR2, fetchMaxR2,
-//                     verifyClaimsPerSource, votesPerClaim }
+//                     verifyClaimsPerSource, votesPerClaim }  (0 is honored)
+//     retrievalOff: true = control run: no scope, search, fetch, or verify; the
+//                   author writes from model memory alone and the tail is
+//                   author-only. Exists for benchmark floors (default false)
+//     sessionModel: informational — the model of the launching session, which
+//                   runs every agent without an explicit model (scope, gap,
+//                   author, review, adjudicate). Recorded, never used ('' ok)
 //     workerModel:  model for search/fetch workers (default 'sonnet')
 //     verifierModel: model casting verification votes (default 'haiku')
 //     reviewer:     { type: 'claude', model: 'inherit'|<model>, label }
-//                   | { type: 'codex-cli', command: <single-line CLI prefix>, label,
-//                       wrapperModel }  wrapperModel: the relay agent that stages the
-//                                       prompt and runs the CLI (default 'opus' — the
-//                                       external model does the reviewing, not the relay)
+//                   | { type: 'cli', command, label, wrapperModel }
+//                       command: ONE line containing the placeholder {prompt},
+//                       which the relay replaces with the staged prompt file's
+//                       absolute path, e.g.
+//                         'pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking high --model openai-codex/gpt-5.6-sol @{prompt}'
+//                         'codex exec --skip-git-repo-check --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort="high" - < {prompt}'
+//                       wrapperModel: the relay agent that stages the prompt and
+//                       runs the CLI (default = workerModel; the external model
+//                       does the reviewing, the relay is mechanical)
+//                   | { type: 'codex-cli', command: <CLI prefix>, label, wrapperModel }
+//                       legacy alias: command has no placeholder and gets
+//                       ' - < {prompt}' appended
 //   }
 //
 // Artifacts the tail agents write into runDir: unreviewed_report.md, review.md,
-// final_report.md. Everything else is carried in this script's return value; the
-// orchestrating session persists results.json / report.md / notes.md from it
-// (the workflow itself cannot write files).
+// final_report.md. The workflow never holds report text: agents write files and
+// return short status objects. Everything else (ledger, tallies, calibration,
+// methodology block, verification appendix) is carried in this script's return
+// value; the orchestrating session persists results.json from it and runs the
+// skill's scripts (assemble-report.py, check-report.py, check-quotes.py) to
+// build report.md and gate the run (the workflow itself cannot write files).
 
 export const meta = {
   name: 'deeper-research',
   description: 'Deep-research run: scoped search angles, gap-driven two-round retrieval with quality-adaptive caps, verbatim page archiving, ranked atomic claim extraction, page-grounded verification with mandatory decoy calibration, and a draft/adversarial-review/adjudicate synthesis tail with mechanical citation checks',
   phases: [
     { title: 'Scope', detail: 'derive search angles from the question + brief + seed sources (skipped when angles are hardcoded)' },
-    { title: 'Search', detail: 'one search worker per angle (dr-search), then dedup, re-rank, and quality-adaptive cap' },
+    { title: 'Search', detail: 'one search worker per angle (dr-search) returning its full result set with snippets, then dedup, snippet triage (re-rank), and quality-adaptive cap' },
     { title: 'Fetch', detail: 'fetch each source, persist verbatim page text, extract ranked atomic claims + bibliographic metadata (dr-fetch)' },
     { title: 'Verify', detail: 'independent page-grounded votes per claim (dr-verify), with planted decoys measuring the verifier' },
     { title: 'Gap', detail: 'gap analysis of the round-1 ledger proposes targeted round-2 angles; retrieval repeats' },
@@ -93,18 +110,44 @@ const ANGLES = A.angles || []
 const N_ANGLES = A.nAngles || 6
 const BLOCKLIST = A.blocklist || []
 const caps = A.caps || {}
-const FETCH_MIN = caps.fetchMin || 3
-const FETCH_MAX = caps.fetchMax || 6
-const R2_ANGLES = caps.r2Angles === undefined ? 2 : caps.r2Angles
-const FETCH_MIN_R2 = caps.fetchMinR2 || 2
-const FETCH_MAX_R2 = caps.fetchMaxR2 || 4
-const VERIFY_CLAIMS_PER_SOURCE = caps.verifyClaimsPerSource || 4
-const VOTES_PER_CLAIM = caps.votesPerClaim || 2
+// `??`, not `||`: a cap of 0 is a real setting (a benchmark floor run fetches
+// nothing), not a request for the default.
+const FETCH_MIN = caps.fetchMin ?? 3
+const FETCH_MAX = caps.fetchMax ?? 6
+const R2_ANGLES = caps.r2Angles ?? 2
+const FETCH_MIN_R2 = caps.fetchMinR2 ?? 2
+const FETCH_MAX_R2 = caps.fetchMaxR2 ?? 4
+const VERIFY_CLAIMS_PER_SOURCE = caps.verifyClaimsPerSource ?? 4
+const VOTES_PER_CLAIM = caps.votesPerClaim ?? 2
+const RETRIEVAL_OFF = A.retrievalOff === true
+if (!RETRIEVAL_OFF && !(Number.isInteger(VOTES_PER_CLAIM) && VOTES_PER_CLAIM >= 1)) {
+  // A claim with zero votes would enter the ledger as "verified" with 0/0
+  // support. Verification is the point; a run without votes is not a run.
+  throw new Error('caps.votesPerClaim must be an integer >= 1 (use retrievalOff for a control run)')
+}
+const SESSION_MODEL = A.sessionModel || ''
 const WORKER = A.workerModel || 'sonnet'
 const VERIFIER = A.verifierModel || 'haiku'
-const REVIEWER = A.reviewer || { type: 'claude', model: 'inherit' }
+// Reviewer normalization: 'codex-cli' is the legacy spelling of a 'cli'
+// reviewer whose prompt goes to stdin. After this block REVIEWER.type is
+// 'claude' or 'cli', and a 'cli' command always carries the {prompt} placeholder.
+const REVIEWER_IN = A.reviewer || { type: 'claude', model: 'inherit' }
+if ((REVIEWER_IN.type === 'codex-cli' || REVIEWER_IN.type === 'cli') &&
+    (typeof REVIEWER_IN.command !== 'string' || !REVIEWER_IN.command.trim())) {
+  throw new Error('args.reviewer.command is required (string) for a cli / codex-cli reviewer')
+}
+const REVIEWER = REVIEWER_IN.type === 'codex-cli'
+  ? Object.assign({}, REVIEWER_IN, { type: 'cli', command: `${REVIEWER_IN.command} - < {prompt}` })
+  : REVIEWER_IN
+if (REVIEWER.type === 'cli') {
+  if (!REVIEWER.command || !REVIEWER.command.includes('{prompt}')) {
+    throw new Error("args.reviewer.command must be a single line containing the {prompt} placeholder (or use type 'codex-cli' with a bare CLI prefix)")
+  }
+  if (/[\r\n]/.test(REVIEWER.command)) throw new Error('args.reviewer.command must be a single line')
+}
 const REVIEWER_LABEL = REVIEWER.label ||
-  (REVIEWER.type === 'codex-cli' ? 'an external reviewer model' : 'an independent Claude reviewer')
+  (REVIEWER.type === 'cli' ? 'an external reviewer model' : 'an independent Claude reviewer')
+const RELAY_MODEL = REVIEWER.wrapperModel || WORKER
 const DECOY_CLAIMS = A.decoys
 // Plugin-provided agent types are namespaced by the plugin name in the
 // session's registry.
@@ -125,9 +168,10 @@ const SEARCH_SCHEMA = {
         properties: {
           url: { type: 'string' },
           title: { type: 'string' },
+          snippet: { type: 'string' },
           relevance: { type: 'string' },
         },
-        required: ['url', 'title', 'relevance'],
+        required: ['url', 'title', 'snippet', 'relevance'],
       },
     },
   },
@@ -139,8 +183,9 @@ const RANK_SCHEMA = {
   properties: {
     ranking: { type: 'array', items: { type: 'integer' } },
     high_quality_count: { type: 'integer' },
+    near_duplicates: { type: 'array', items: { type: 'integer' } },
   },
-  required: ['ranking', 'high_quality_count'],
+  required: ['ranking', 'high_quality_count', 'near_duplicates'],
 }
 
 const SCOPE_SCHEMA = {
@@ -195,7 +240,9 @@ const BATCH_VOTES_SCHEMA = {
           reasoning: { type: 'string' },
           quote_found: { type: 'boolean' },
         },
-        required: ['claim_index', 'vote_index', 'verdict', 'confidence', 'reasoning'],
+        // quote_found is required: a vote that omits it cannot be checked by the
+        // post-run quote gate, and an uncheckable vote is worth nothing.
+        required: ['claim_index', 'vote_index', 'verdict', 'confidence', 'reasoning', 'quote_found'],
       },
     },
   },
@@ -221,32 +268,29 @@ const GAP_SCHEMA = {
   required: ['gaps', 'new_angles'],
 }
 
-const DRAFT_SCHEMA = {
+// The synthesis tail returns STATUS, never text: each agent writes its file
+// and reports that it did. Echoing a 30 KB report back through structured
+// output doubled the most expensive output tokens of the run for text that
+// was already on disk; the orchestrating session assembles the report from
+// the files afterwards.
+const WRITTEN_SCHEMA = {
   type: 'object',
   properties: {
-    draft: { type: 'string' },
+    written: { type: 'boolean' },
+    bytes: { type: 'integer' },
     notes: { type: 'string' },
   },
-  required: ['draft', 'notes'],
+  required: ['written', 'bytes', 'notes'],
 }
 
 const REVIEW_SCHEMA = {
   type: 'object',
   properties: {
-    review: { type: 'string' },
     review_ok: { type: 'boolean' },
+    bytes: { type: 'integer' },
     notes: { type: 'string' },
   },
-  required: ['review', 'review_ok', 'notes'],
-}
-
-const FINAL_SCHEMA = {
-  type: 'object',
-  properties: {
-    report: { type: 'string' },
-    notes: { type: 'string' },
-  },
-  required: ['report', 'notes'],
+  required: ['review_ok', 'bytes', 'notes'],
 }
 
 // ---------------------------------------------------------------- Search
@@ -263,27 +307,39 @@ const seenUrls = new Set()
 const allFound = []
 
 // One round of search fan-out: one worker per angle, then dedup + blocklist +
-// re-rank + cap. Re-ranking before the cap matters: without it the fetch budget
-// goes to whatever was discovered first, an arbitrary selection at exactly the
-// point where recall is decided. The cap is quality-adaptive: the ranker
-// certifies how many candidates are genuinely high-quality and the fetch count
-// follows that certification within [fetchMin, fetchMax].
+// snippet triage (re-rank) + cap. The workers return EVERY result their
+// searches produced, with whatever the tool showed about each (a snippet when
+// the engine gives one, else the worker's note): a search already paid for ten
+// results per query, and title plus a line of context is enough to judge
+// relevance, recency, and modality without a fetch. Keeping only a worker's
+// top 3 threw that breadth away before anything could rank it. Re-ranking the whole pool before the
+// cap matters: without it the fetch budget goes to whatever was discovered
+// first, an arbitrary selection at exactly the point where recall is decided.
+// The cap is quality-adaptive: the ranker certifies how many candidates are
+// genuinely high-quality and the fetch count follows that certification
+// within [fetchMin, fetchMax]. Verification economics are untouched: only the
+// pool the cap chooses from grows.
 async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
   const batches = await parallel(angles.map((angle, i) => () =>
     agent(
       `Run 1-2 web searches on ONE angle of the research question "${QUESTION}".\n` +
       `Your angle: ${angle}\n\n` +
-      `Return the 3 most relevant sources you find. Prefer primary sources over secondhand coverage — ` +
-      `but "primary" depends on the angle: peer-reviewed/preprint papers for research findings, engineering ` +
-      `blogs or postmortems from the teams that built the systems for practice claims, benchmark ` +
-      `leaderboards/repos for evaluation claims, official docs or standards for specification claims. ` +
-      `Vary query phrasing to reach the source types your angle needs; do not return 3 hits of the same ` +
-      `modality when the angle spans several. Avoid news aggregators and SEO content farms. ` +
+      `Return EVERY result your searches produced (typically 10-20), not a selection: a later triage ` +
+      `stage ranks the whole pool, and a result you drop here is lost to the run. Phrase queries to ` +
+      `reach primary sources — but "primary" depends on the angle: peer-reviewed/preprint papers for ` +
+      `research findings, engineering blogs or postmortems from the teams that built the systems for ` +
+      `practice claims, benchmark leaderboards/repos for evaluation claims, official docs or standards ` +
+      `for specification claims. Vary query phrasing to reach the source types your angle needs. ` +
       (BLOCKLIST.length
         ? `Exclude any source whose URL contains "${BLOCKLIST.join('" or "')}", and any source that primarily ` +
           `summarizes or discusses content from those domains. `
         : '') +
-      `For each source give url, title, and a one-line relevance note. ` +
+      `For each result give url, title, snippet, and relevance. snippet = whatever the search tool ` +
+      `showed ABOUT THAT PAGE beyond its title, copied VERBATIM (the engine's snippet if it gives one, ` +
+      `or the sentence of the tool's summary that refers to that page); "" when the tool listed only ` +
+      `a title and URL — never write a snippet yourself. relevance = a one-line note of your own: the ` +
+      `source modality, what the page appears to cover, and a flag for aggregators or SEO content ` +
+      `farms (flag them, do not omit them). ` +
       `If searches fail, return an empty results array.`,
       { label: `search:${roundLabel}:${i}`, phase: 'Search', agentType: T_SEARCH, model: WORKER, effort: 'low', schema: SEARCH_SCHEMA }
     )
@@ -296,8 +352,9 @@ async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
       if (!r.url || BLOCKLIST.some(b => r.url.includes(b))) continue
       if (seenUrls.has(urlKey(r.url))) continue
       seenUrls.add(urlKey(r.url))
-      fresh.push(r)
-      allFound.push(r)
+      const cand = { url: r.url, title: r.title || '', snippet: r.snippet || '', relevance: r.relevance || '', round: roundLabel }
+      fresh.push(cand)
+      allFound.push(cand)
     }
   }
 
@@ -308,10 +365,13 @@ async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
   if (fresh.length > fetchMin) {
     const rankResult = await agent(
       `Rank candidate sources for the research question "${QUESTION}".\n\n` +
-      `Below are ${fresh.length} sources found by parallel searches on different angles of the ` +
-      `question. Between ${fetchMin} and ${Math.min(fetchMax, fresh.length)} of them will be ` +
-      `fetched and read — how many depends on YOUR quality call — so the ranking decides coverage.\n\n` +
-      fresh.map((s, i) => `[${i}] ${s.url}\n    title: ${s.title}\n    relevance: ${s.relevance}`).join('\n') +
+      `Below are ${fresh.length} candidate sources found by parallel searches on different angles of ` +
+      `the question, each with its search-engine snippet. Between ${fetchMin} and ` +
+      `${Math.min(fetchMax, fresh.length)} of them will be fetched and read — how many depends on ` +
+      `YOUR quality call — so the ranking decides coverage. Judge from the title, the snippet where ` +
+      `one is present, and the search worker's note: together they are enough to tell relevance, ` +
+      `recency, and modality without a fetch.\n\n` +
+      fresh.map((s, i) => `[${i}] ${s.url}\n    title: ${s.title}\n    snippet: ${(s.snippet || '').slice(0, 400)}\n    note: ${s.relevance}`).join('\n') +
       `\n\nRank ALL indices best-first by: (a) direct relevance to the research question, ` +
       `(b) primary literature over secondary commentary, (c) diversity — the fetched set together ` +
       `should cover as many distinct facets of the question as possible, so demote a source that ` +
@@ -320,23 +380,29 @@ async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
       `you certify as genuinely high-quality for this question — primary, authoritative, ` +
       `substantive. Be honest: do not pad the count to fill the budget, and do not lowball it if ` +
       `the pool really is strong; only certified sources above the floor get fetched. ` +
-      `Judge ONLY from the url/title/relevance text given; do not search or fetch anything. ` +
-      `Return every index exactly once in the ranking array.`,
+      `ALSO return near_duplicates: indices that are the same document or a re-hosting/summary of a ` +
+      `better-ranked candidate (mirrors, aggregator copies, the same paper under another URL); they ` +
+      `are excluded from the fetch budget. Judge ONLY from the url/title/snippet/note text given; do ` +
+      `not search or fetch anything. Return every index exactly once in the ranking array.`,
       { label: `rerank:${roundLabel}`, phase: 'Search', model: WORKER, effort: 'low', schema: RANK_SCHEMA }
     )
     // Sanitize the ranking defensively: keep the first occurrence of each valid
     // index, append anything the ranker omitted, and fall back to discovery
     // order (floor count) if ranking failed entirely. Drops are always logged —
     // a silent cap reads as "covered everything" when it didn't.
+    const dupes = new Set(((rankResult && rankResult.near_duplicates) || [])
+      .filter(i => Number.isInteger(i) && i >= 0 && i < fresh.length))
     const order = []
     const seenIdx = new Set()
     for (const i of ((rankResult && rankResult.ranking) || [])) {
-      if (Number.isInteger(i) && i >= 0 && i < fresh.length && !seenIdx.has(i)) {
+      if (Number.isInteger(i) && i >= 0 && i < fresh.length && !seenIdx.has(i) && !dupes.has(i)) {
         seenIdx.add(i)
         order.push(i)
       }
     }
-    for (let i = 0; i < fresh.length; i++) if (!seenIdx.has(i)) order.push(i)
+    for (let i = 0; i < fresh.length; i++) if (!seenIdx.has(i) && !dupes.has(i)) order.push(i)
+    // Near-duplicates never get fetched, but they stay in the pool record.
+    for (const i of dupes) order.push(i)
     reranked = !!(rankResult && rankResult.ranking && rankResult.ranking.length)
     highQuality = reranked && Number.isInteger(rankResult.high_quality_count)
       ? Math.max(0, rankResult.high_quality_count) : null
@@ -344,11 +410,12 @@ async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
       ? Math.min(fetchMax, Math.max(fetchMin, highQuality === null ? fetchMin : highQuality), fresh.length)
       : Math.min(fetchMin, fresh.length)
     picked = order.slice(0, take).map(i => fresh[i])
-    dropped = order.slice(take).map(i => fresh[i].url)
-    log(`Cap (${roundLabel}): fetching ${take} of ${fresh.length} new sources (${reranked ? `ranker certified ${highQuality} high-quality, bounds [${fetchMin}, ${fetchMax}]` : 'RERANK FAILED, floor count in discovery order'}); dropped: ${dropped.join(', ')}`)
+    dropped = order.slice(take).map(i => fresh[i])
+    log(`Triage (${roundLabel}): ${fresh.length} candidates, fetching ${take} (${reranked ? `ranker certified ${highQuality} high-quality, ${dupes.size} near-duplicates, bounds [${fetchMin}, ${fetchMax}]` : 'RERANK FAILED, floor count in discovery order'}); not fetched: ${dropped.map(d => d.url).join(', ')}`)
   } else {
-    picked = fresh
-    log(`Fetching all ${picked.length} new sources (${roundLabel})`)
+    picked = fresh.slice(0, fetchMax)
+    dropped = fresh.slice(fetchMax)
+    log(`Fetching ${picked.length} of ${fresh.length} new sources (${roundLabel}, at or below the floor, no re-rank)${dropped.length ? `; dropped by fetchMax: ${dropped.map(d => d.url).join(', ')}` : ''}`)
   }
   return { picked: picked, found: fresh.length, reranked: reranked, dropped: dropped, high_quality: highQuality }
 }
@@ -488,8 +555,10 @@ function fetchVerifyRound(picked, siBase, roundNo) {
         log(`Verify cap: ${src.url} yielded ${allClaims.length} claims, verifying top ${claims.length}, dropped: ${allClaims.slice(claims.length).map(c => c.claim.slice(0, 60)).join(' | ')}`)
       }
       if (!claims.length) {
-        log(`No usable claims from ${src.url}`)
-        return { source: src.url, title: src.title, round: roundNo, biblio: biblio, fetch_ok: !!(extracted && extracted.fetch_ok), page_file: pageFile, extracted_total: 0, claims: [], unverified: [], calibration: null }
+        // Nothing to vote on: either the page yielded nothing, or the verify
+        // cap is 0 — in which case every extracted claim is an unverified lead.
+        log(allClaims.length ? `Verify cap 0: ${src.url} yielded ${allClaims.length} claims, all carried as unverified leads` : `No usable claims from ${src.url}`)
+        return { source: src.url, title: src.title, round: roundNo, biblio: biblio, fetch_ok: !!(extracted && extracted.fetch_ok), page_file: pageFile, extracted_total: allClaims.length, claims: [], unverified: allClaims.map(c => ({ claim: c.claim, quote: c.quote })), calibration: null }
       }
       // One decoy is appended to each source's verify batch, round-robin by
       // GLOBAL source index (spans all rounds, so every decoy gets exercised).
@@ -514,8 +583,11 @@ function fetchVerifyRound(picked, siBase, roundNo) {
             .sort((a, b) => a.vote_index - b.vote_index)
             .map(v => ({ verdict: v.verdict, confidence: v.confidence, reasoning: v.reasoning, quote_found: v.quote_found })),
         })),
+        // The decoy's fabricated quote is persisted so the post-run quote gate
+        // can grep it against the page: a hit means the decoy was not false.
         calibration: decoy ? {
           claim: decoy.claim,
+          quote: decoy.quote,
           votes: ((res && res.votes) || [])
             .filter(v => v.claim_index === claims.length)
             .sort((a, b) => a.vote_index - b.vote_index)
@@ -532,7 +604,9 @@ function fetchVerifyRound(picked, siBase, roundNo) {
 // or one scoping agent derives them from question + brief + seeds. The angles
 // are the unit of search fan-out, so their quality bounds recall.
 let runAngles = ANGLES
-if (!runAngles.length) {
+if (RETRIEVAL_OFF) {
+  log('Retrieval OFF: control run — no scope, search, fetch, or verification; the author writes from memory')
+} else if (!runAngles.length) {
   phase('Scope')
   const scope = await agent(
     `You are the scoping agent of a deep-research pipeline. Derive the search angles for this ` +
@@ -571,13 +645,19 @@ if (!runAngles.length) {
 // and citable like any other source (round tag 0). Their urls enter the dedup
 // set FIRST so searches re-surfacing them dedup away instead of double-fetching.
 const seedPicked = SEED_SOURCES.map(s => ({
-  url: s.url, title: s.title, relevance: 'user-provided seed source', localPath: s.localPath || '',
+  url: s.url, title: s.title, snippet: '', relevance: 'user-provided seed source', round: 'r0', localPath: s.localPath || '',
 }))
 for (const s of seedPicked) { seenUrls.add(urlKey(s.url)); allFound.push(s) }
-const results0 = seedPicked.length ? await fetchVerifyRound(seedPicked, 0, 0) : []
-phase('Search')
-const r1 = await searchRound(runAngles, 'r1', FETCH_MIN, FETCH_MAX)
-const results1 = await fetchVerifyRound(r1.picked, seedPicked.length, 1)
+const EMPTY_ROUND = { picked: [], found: 0, reranked: false, dropped: [], high_quality: null }
+let results0 = []
+let r1 = EMPTY_ROUND
+let results1 = []
+if (!RETRIEVAL_OFF) {
+  results0 = seedPicked.length ? await fetchVerifyRound(seedPicked, 0, 0) : []
+  phase('Search')
+  r1 = await searchRound(runAngles, 'r1', FETCH_MIN, FETCH_MAX)
+  results1 = await fetchVerifyRound(r1.picked, seedPicked.length, 1)
+}
 
 // ---------------------------------------------------- Gap analysis + Round 2
 // Recall, not precision, is usually the binding constraint on survey quality;
@@ -600,7 +680,11 @@ function gapPrompt(roundResults, dropped) {
     `Research question:\n"${QUESTION}"\n\n` +
     `Round-1 search angles:\n${runAngles.map(a => '- ' + a).join('\n')}\n\n` +
     `Evidence so far (seed sources first, then round-1; verified claims and unverified leads per source):\n${summary}\n\n` +
-    (dropped.length ? `Sources found in round 1 but not fetched (cap): ${dropped.join(', ')}\n\n` : '') +
+    (dropped.length
+      ? `Candidates found in round 1 but not fetched (cap), with their search snippets — a gap that one ` +
+        `of these would fill is a reason to target it in round 2:\n` +
+        dropped.map(d => `- ${d.url} — ${d.title}${d.snippet ? ` — "${d.snippet.slice(0, 200)}"` : ''}`).join('\n') + '\n\n'
+      : '') +
     'Identify the most important GAPS: facets of the research question with no or thin evidence, ' +
     'pillars resting on a single source, claims that need independent corroboration, and missing ' +
     'source modalities (papers vs engineering practice vs benchmarks/evaluations vs official docs). ' +
@@ -613,10 +697,10 @@ function gapPrompt(roundResults, dropped) {
 }
 
 let gapAnalysis = null
-let r2 = { picked: [], found: 0, reranked: false, dropped: [], high_quality: null }
+let r2 = EMPTY_ROUND
 let results2 = []
 const preGapResults = results0.filter(Boolean).concat(results1.filter(Boolean))
-if (R2_ANGLES > 0 && preGapResults.length) {
+if (!RETRIEVAL_OFF && R2_ANGLES > 0 && preGapResults.length) {
   phase('Gap')
   gapAnalysis = await agent(gapPrompt(preGapResults, r1.dropped), {
     label: 'gap-analysis',
@@ -635,7 +719,7 @@ if (R2_ANGLES > 0 && preGapResults.length) {
   } else {
     log('Gap analysis proposed no new angles; running single-round')
   }
-} else if (R2_ANGLES > 0) {
+} else if (R2_ANGLES > 0 && !RETRIEVAL_OFF) {
   log('No seed or round-1 results; skipping gap analysis and round 2')
 }
 const gapAngles = ((gapAnalysis && gapAnalysis.new_angles) || []).slice(0, R2_ANGLES)
@@ -665,7 +749,7 @@ const calCounts = { supported: 0, refuted: 0, unverifiable: 0, error: 0 }
 const calDetails = []
 for (const srcRes of flat) {
   if (!srcRes.calibration) continue
-  calDetails.push({ source: srcRes.source, claim: srcRes.calibration.claim, votes: srcRes.calibration.votes })
+  calDetails.push({ source: srcRes.source, claim: srcRes.calibration.claim, quote: srcRes.calibration.quote || '', votes: srcRes.calibration.votes })
   for (const v of srcRes.calibration.votes) {
     if (calCounts[v.verdict] !== undefined) calCounts[v.verdict] += 1
   }
@@ -707,7 +791,6 @@ const ledger = {
   tally: tally,
 }
 const ledgerJson = JSON.stringify(ledger)
-const ALL_SUP = `${VOTES_PER_CLAIM}/${VOTES_PER_CLAIM}`
 
 // --------------------------------------------- Methodology (mechanical)
 // Built by plain JS from run config + measured tallies. The synthesis agents
@@ -721,75 +804,105 @@ const methodologyMd = [
   (TEMPLATE_SHA256 ? `; template sha256 ${TEMPLATE_SHA256.slice(0, 12)}` : '') +
   '). Procedure and measured parameters for this run:',
   '',
-  SEED_SOURCES.length
+  RETRIEVAL_OFF
+    ? `- **Grounding**: none. No source was ingested${SEED_SOURCES.length ? ` (${SEED_SOURCES.length} seed source${SEED_SOURCES.length === 1 ? ' was' : 's were'} listed but not read)` : ''}.`
+    : SEED_SOURCES.length
     ? `- **Grounding**: the query was grounded in ${SEED_SOURCES.length} user-provided seed ` +
       `source${SEED_SOURCES.length === 1 ? '' : 's'}, ingested, claim-extracted, and verified ` +
       `like every other source, and used to scope the retrieval.`
     : '- **Grounding**: no user-provided seed sources; scope derives from the question alone.',
-  `- **Retrieval, round 1**: ${runAngles.length} independent search angles ` +
-  `(${ANGLES.length ? 'fixed for this run' : 'derived by a scoping pass from the question and seed material'}) ` +
-  `were queried in parallel; ${r1.found} unique sources were found after deduplication and ` +
-  `blocklisting and ranked for relevance, primary-source quality, and facet diversity` +
-  (r1.high_quality === null
-    ? `; ${r1.picked.length} were fetched in full.`
-    : `; the ranker certified ${r1.high_quality} candidates as high-quality and ` +
-      `${r1.picked.length} were fetched in full (quality-adaptive budget, bounds ` +
-      `${FETCH_MIN}–${FETCH_MAX}).`),
-  gapAngles.length
+  RETRIEVAL_OFF
+    ? '- **Retrieval**: none. This is a retrieval-off control run: no search, fetch, extraction, ' +
+      'or verification was performed. The text rests on the authoring model\'s memory alone, and ' +
+      'its citations are unverified.'
+    : `- **Retrieval, round 1**: ${runAngles.length} independent search angles ` +
+      `(${ANGLES.length ? 'fixed for this run' : 'derived by a scoping pass from the question and seed material'}) ` +
+      `were queried in parallel; ${r1.found} unique candidates were found after deduplication and ` +
+      `blocklisting and triaged from their search-result titles, snippets, and worker notes for ` +
+      `relevance, primary-source quality, and facet diversity` +
+      (r1.high_quality === null
+        ? `; ${r1.picked.length} were fetched in full.`
+        : `; the ranker certified ${r1.high_quality} candidates as high-quality and ` +
+          `${r1.picked.length} were fetched in full (quality-adaptive budget, bounds ` +
+          `${FETCH_MIN}–${FETCH_MAX}).`),
+  RETRIEVAL_OFF ? null : gapAngles.length
     ? `- **Retrieval, round 2 (gap-driven)**: an analysis of the evidence so far identified ` +
       `${((gapAnalysis && gapAnalysis.gaps) || []).length} coverage gaps and generated ` +
       `${gapAngles.length} targeted follow-up angle${gapAngles.length === 1 ? '' : 's'}; ` +
-      `${r2.found} further unique sources were found and ${r2.picked.length} were fetched` +
+      `${r2.found} further unique candidates were found and triaged and ${r2.picked.length} were fetched` +
       (r2.high_quality === null ? '.' : ` (${r2.high_quality} certified high-quality, bounds ${FETCH_MIN_R2}–${FETCH_MAX_R2}).`)
     : '- **Retrieval, round 2**: not run (no gap-driven angles were generated for this run).',
+  RETRIEVAL_OFF ? null :
   `- **Extraction**: from each fetched page, atomic claims were extracted (uncapped, ordered by ` +
   `centrality) under fidelity rules — one checkable statement per claim, the page's own hedging ` +
   `preserved, numeric figures carried verbatim, and every supporting quote mechanically checked ` +
   `against the archived page text.`,
+  RETRIEVAL_OFF ? null :
   `- **Verification**: the top ${VERIFY_CLAIMS_PER_SOURCE} claims per source each received ` +
   `${VOTES_PER_CLAIM} independent adversarial votes (verifier model: ${VERIFIER}), each vote ` +
   `grounded in the archived page text with a mechanical quote-presence check. ` +
   `This run: ${totalClaims} claims, ${totalVotes} votes (${voteCounts.supported} supported, ` +
   `${voteCounts.refuted} refuted, ${voteCounts.unverifiable} unverifiable, ${voteCounts.error} error).`,
+  // Every detection rate carries its denominator: a percentage over a handful
+  // of votes reads very differently from one over forty.
+  RETRIEVAL_OFF ? null :
   `- **Verifier calibration**: ${calibration.decoys_configured} known-false decoy claims with ` +
   `fabricated quotes were planted among the verify batches (excluded from all evidence). ` +
-  `Detection this run: strict (refuted) ${pct(calibration.strict_detection_rate)}, soft ` +
-  `(refuted or unverifiable) ${pct(calibration.soft_detection_rate)}; ` +
-  `${calCounts.supported} decoy votes were fooled.`,
-  `- **Synthesis**: the report was drafted from the evidence ledger, adversarially reviewed by ` +
-  `${REVIEWER_LABEL} in a separate context, and revised with each review finding adjudicated ` +
-  `against the evidence. Citations were mechanically validated against the source registry.`,
+  `Detection this run over ${calVoteTotal} decoy votes: strict (refuted) ` +
+  `${pct(calibration.strict_detection_rate)} (${calCounts.refuted}/${calVoteTotal}), soft ` +
+  `(refuted or unverifiable) ${pct(calibration.soft_detection_rate)} ` +
+  `(${calCounts.refuted + calCounts.unverifiable}/${calVoteTotal}); ` +
+  `${calCounts.supported}/${calVoteTotal} decoy votes were fooled.`,
+  RETRIEVAL_OFF
+    ? '- **Synthesis**: the report was written by the authoring model from memory, without ' +
+      'adversarial review or mechanical citation validation.'
+    : `- **Synthesis**: the report was drafted from the evidence ledger and submitted for adversarial ` +
+      `review by ${REVIEWER_LABEL} in a separate context; where the review completed, each finding ` +
+      `was adjudicated against the evidence before revision (the run record states whether this is ` +
+      `the revised or the unreviewed version). Citations were mechanically validated against the ` +
+      `source registry.`,
   '',
-  `Citation conventions: a plain [S*n*] citation marks a claim that received ${ALL_SUP} supported ` +
-  'verification votes; [S*n**] (asterisk) marks an unverified lead — extracted but not verified, or ' +
-  'verified with disagreement, as stated in prose. Substantive statements without a citation are ' +
-  'authorial synthesis. Per-claim verdicts appear in Appendix A.',
-].join('\n')
+  RETRIEVAL_OFF
+    ? 'Citation conventions: sources are cited as Markdown footnotes from the authoring model\'s ' +
+      'memory; none was retrieved or verified.'
+    : 'Citation conventions: sources are cited as Markdown footnotes, one footnote per source, ' +
+      'with the bibliography entry in the footnote definition. A citation marks where a statement ' +
+      'comes from, not how well it was verified: the prose hedges statements that rest on ' +
+      'unverified leads, split votes, or a quote the verifier could not locate, and Appendix A ' +
+      'lists every claim with its verdicts. Substantive statements without a citation are ' +
+      'authorial synthesis.',
+].filter(line => line !== null).join('\n')
 
 // ------------------------------------------------ Synthesis rules (shared)
-// The report's epistemic status is carried by citation FORM: a plain key means
-// fully verified, an asterisked key means unverified lead, and the ABSENCE of a
-// key on a substantive sentence explicitly signals authorial judgment. These
-// conventions are what the reviewer polices and the citation check enforces.
+// Citations say WHERE a statement comes from (a Markdown footnote per source);
+// PROSE says how well it is verified (hedging that matches the ledger status);
+// the ABSENCE of a footnote on a substantive sentence signals authorial
+// judgment. The reviewer polices hedging against the ledger, and the post-run
+// check-report.py script validates the footnote wiring against the ledger.
 const SYNTHESIS_RULES =
   'Grounding and status rules (MANDATORY):\n' +
   '- Your ONLY evidence base is the ledger. Never add outside facts as evidence.\n' +
-  '- Citation convention (mechanically checked downstream): cite by ledger key immediately after ' +
-  `every substantive factual statement. Plain [S3] is permitted ONLY for content whose ledger claim ` +
-  `received ${ALL_SUP} supported votes. [S3*] (asterisk inside the bracket) marks an unverified ` +
-  'lead: a claim from the unverified tail, or a verified-set claim whose votes disagreed, failed, ' +
-  'or carried quote_found=false — in those cases also state in prose what the verification accepted ' +
-  'and rejected. One key per bracket pair (write [S3][S5], never [S3, S5]).\n' +
-  '- Your own inference, cross-source synthesis, or design recommendation carries NO citation key: ' +
-  'in this report an uncited substantive sentence explicitly signals authorial judgment. Never ' +
-  'attach a key to your own inference, and never leave a ledger-derived fact uncited.\n' +
-  '- Claims whose votes were refuted may be used only to discuss the refutation itself, cited [S3*] ' +
+  '- Citation form (mechanically checked downstream): GitHub-style Markdown footnotes. Put a ' +
+  'footnote reference like [^3] immediately after every substantive factual statement drawn from ' +
+  'the ledger. ONE footnote per source: number footnotes in order of first citation, and reuse the ' +
+  'same number every later time you cite that source. Several sources on one statement: ' +
+  '[^2][^5], never [^2, 5]. Footnote references carry NO status marks of any kind.\n' +
+  '- Status is carried by prose, not by citation form. A statement resting on a claim that ' +
+  `received ${VOTES_PER_CLAIM}/${VOTES_PER_CLAIM} supported votes may be stated plainly. A statement resting on ` +
+  'an unverified lead (a claim from the unverified tail), on a claim whose votes disagreed or ' +
+  'failed, or on a claim whose quote the verifier did not locate (quote_found=false) MUST be ' +
+  'hedged in the sentence itself ("one source reports, uncorroborated here, that…", "a claim the ' +
+  'evidence review could not confirm holds that…"), stating what the verification accepted and ' +
+  'rejected. Claims whose votes were refuted may be used only to discuss the refutation itself, ' +
   'with the disagreement stated in prose.\n' +
+  '- Your own inference, cross-source synthesis, or design recommendation carries NO footnote: ' +
+  'in this report an uncited substantive sentence explicitly signals authorial judgment. Never ' +
+  'attach a footnote to your own inference, and never leave a ledger-derived fact uncited.\n' +
   '- Register: formal survey prose throughout. No first person ("I", "my", "we recommend"). No ' +
   'pipeline jargon in body prose — "ledger", "votes", "extraction", "quote_found" belong ' +
-  'only in the Methodology section and Appendix. Express epistemic strength through precise ' +
-  'hedging ("one study reports…", "a practitioner account attributes…", "this remains ' +
-  'uncorroborated") rather than status tags.\n' +
+  'only in the Methodology section. Express epistemic strength through precise hedging ' +
+  '("one study reports…", "a practitioner account attributes…", "this remains uncorroborated") ' +
+  'rather than status tags.\n' +
   '- No absolutes ("never", "always", "requires", "guarantees") built on correlational or ' +
   'single-benchmark evidence. Keep benchmark-bounded findings bounded ("on benchmark X", ' +
   '"in the evaluated systems"). Preserve the hedges the ledger claims carry.\n' +
@@ -798,13 +911,16 @@ const SYNTHESIS_RULES =
   '- Numbers measured on different models, benchmarks, or settings must not be juxtaposed as if ' +
   'directly comparable without saying so.\n' +
   '- Include ledger material that contradicts or complicates your narrative.\n' +
-  '- End the report with a "## Sources" section: one line per key you actually cited, format ' +
-  '"[S3] {authors} ({year}). {title}. {venue}. {url} (accessed ' + RUN_DATE + ')" — authors from ' +
+  '- Footnote definitions go at the very END of the document, one per cited source, in numeric ' +
+  'order, no heading above them, format: ' +
+  '"[^3]: {authors} ({year}). {title}. {venue}. {url} (accessed ' + RUN_DATE + ')" — authors from ' +
   'the ledger biblio field ("First Author et al." beyond three names; omit the authors/year/venue ' +
   'parts gracefully when the ledger biblio is empty), and append ", fetch failed" after the date ' +
-  'where the ledger marks fetch_ok=false. Copy title and url VERBATIM from the ledger. Every ' +
-  'inline-cited key appears exactly once; no entries for keys you never cited. This section is ' +
-  'mechanically checked against the ledger.\n'
+  'where the ledger marks fetch_ok=false. Copy the title VERBATIM from the ledger "title" field and ' +
+  'the url VERBATIM and COMPLETE from the ledger "source" field — the url is the key the ' +
+  'mechanical check joins on. Every referenced ' +
+  'footnote has exactly one definition; no definitions for sources you never cited; no two ' +
+  'definitions for one source.\n'
 
 const REPORT_STRUCTURE =
   'Structure (MANDATORY):\n' +
@@ -824,30 +940,35 @@ const REPORT_STRUCTURE =
   'criteria, each with its evidence basis in parentheses, using the citation conventions.\n' +
   '- Limitations of the evidence base, including which parts of the question the evidence ' +
   'under-covers.\n' +
-  '- The "## Sources" bibliography last, as specified above. Do NOT write an appendix — a ' +
-  'verification appendix is attached mechanically after authoring.\n'
+  '- The footnote definitions last, as specified above. Do NOT write a "Sources" or "References" ' +
+  'section and do NOT write an appendix — a verification appendix is attached mechanically after ' +
+  'authoring.\n'
 
 const REVIEW_CRITERIA =
-  'The report claims to: ground every factual statement in the evidence ledger; cite by ledger key ' +
-  `with plain [S3] only for claims that received ${ALL_SUP} supported votes and [S3*] for ` +
-  'unverified leads (unverified-tail claims, split/failed votes, quote_found=false); carry NO key ' +
-  'on authorial interpretation; include a verbatim Methodology block; include a "## Systems ' +
-  'compared" table with an explicit comparability note when two or more systems appear; use formal ' +
-  'survey register (no first person, no pipeline jargon in body prose); and end with a ' +
-  '"## Sources" bibliography whose entries copy title/url verbatim from the ledger.\n\n' +
+  'The report claims to: ground every factual statement in the evidence ledger; cite sources as ' +
+  'Markdown footnotes (one footnote per source, definitions at the end copying title/url verbatim ' +
+  'from the ledger); carry NO footnote on authorial interpretation; hedge, in the sentence itself, ' +
+  `every statement that rests on less than ${VOTES_PER_CLAIM}/${VOTES_PER_CLAIM} supported votes (unverified-tail claims, ` +
+  'split or failed votes, quote_found=false) and state disagreements where votes were refuted; ' +
+  'include a verbatim Methodology block; include a "## Systems compared" table with an explicit ' +
+  'comparability note when two or more systems appear; and use formal survey register (no first ' +
+  'person, no pipeline jargon in body prose).\n\n' +
   'Review adversarially for: (1) grounding violations — outside knowledge smuggled in as evidence, ' +
-  'or ledger-derived facts left uncited; (2) status errors — plain-cited statements resting on ' +
-  'claims without full supported votes, leads missing the asterisk, refuted or disputed claims ' +
-  'used without stating the disagreement, miscounted votes, misstated numbers; (3) overreach — ' +
-  'absolutes or causal language stronger than the ledger warrants, restated results counted as ' +
-  'independent corroboration, authorial judgment written as if evidenced; (4) cherry-picking — ' +
-  'ledger material that complicates the narrative but was omitted; (5) citation and bibliography ' +
-  'errors — inline keys not in the ledger, statements citing a source whose ledger claims do not ' +
-  'support them, missing or malformed "## Sources" section, bibliography title/url differing from ' +
-  'the ledger, uncited bibliography entries; (6) internal inconsistencies; (7) genre and structure ' +
-  '— Methodology block missing or edited, comparison table missing or lacking its comparability ' +
-  'note, register violations (first person, jargon in body prose), does it answer the question, ' +
-  'are the criteria usable.\n\n' +
+  'or ledger-derived facts left uncited; (2) status errors — a statement stated plainly whose ' +
+  'ledger claim lacks full supported votes, a hedge that overstates or understates what the votes ' +
+  'said, refuted or disputed claims used without stating the disagreement, miscounted votes, ' +
+  'misstated numbers; (3) overreach — absolutes or causal language stronger than the ledger ' +
+  'warrants, restated results counted as independent corroboration, authorial judgment written as ' +
+  'if evidenced; (4) cherry-picking — ledger material that complicates the narrative but was ' +
+  'omitted; (5) citation errors — a footnote whose source\'s ledger claims do not support the ' +
+  'statement it is attached to, a footnote reference with no definition or a definition never ' +
+  'referenced, a definition whose title/url differ from the ledger, two definitions for one ' +
+  'source; (6) internal inconsistencies; (7) genre and structure — Methodology block missing or ' +
+  'edited, comparison table missing or lacking its comparability note, register violations ' +
+  '(first person, jargon in body prose), does it answer the question, are the criteria usable.\n\n' +
+  'NOT a finding: the absence of "Appendix A" (the per-claim verification ledger the Methodology ' +
+  'block refers to). That appendix is attached mechanically AFTER review and adjudication; the ' +
+  'draft must not contain one, and a draft that does contain an appendix is the fault.\n\n' +
   'For every finding: quote the offending passage, state the category, cite the ledger evidence, ' +
   'rate severity (critical/major/minor). Do not pad with trivia; say briefly where the report is ' +
   'sound. End with an overall verdict (faithful / partially faithful / unfaithful) and the 3 most ' +
@@ -856,9 +977,11 @@ const REVIEW_CRITERIA =
 const REVISE_RULES =
   'Adjudicate every review finding against the ledger (ground truth). The reviewer can overreach ' +
   'too: apply a fix only if the ledger supports the finding; where you reject a finding, leave the ' +
-  'passage as is — no note needed. Keep the mandatory structure, register, and ' +
-  'citation/bibliography rules; the Methodology section stays verbatim; the ranked "what matters ' +
-  'most" answer stays up front — do NOT let the revision bury the lede.'
+  'passage as is — no note needed. Keep the mandatory structure, register, footnote-citation, and ' +
+  'hedging rules; the Methodology section stays verbatim; the ranked "what matters most" answer ' +
+  'stays up front — do NOT let the revision bury the lede. Never add an appendix, ' +
+  'a "Sources" section, or any per-claim verdict listing: the verification appendix is attached ' +
+  'mechanically after you finish, and a review finding that asks for one is rejected.'
 
 const LEDGER_SHAPE =
   'Per source the ledger holds: a citation key, url ("source"), title, retrieval round, biblio ' +
@@ -872,15 +995,54 @@ const METHODOLOGY_BLOCK = '--- METHODOLOGY BEGIN ---\n' + methodologyMd + '\n---
 // Three separate contexts on purpose. The author and the adjudicator work FOR
 // the report; the reviewer works AGAINST it from a fresh context — same-model
 // cross-context review reliably catches real status errors, and a second model
-// family (the codex-cli reviewer) adds blind-spot diversity when configured.
-// The adjudicator, not the reviewer, decides what gets applied: reviewers
+// family (a 'cli' reviewer) adds blind-spot diversity when configured. The
+// adjudicator, not the reviewer, decides what gets applied: reviewers
 // overreach, and a finding is applied only when the ledger supports it.
+//
+// Every tail agent WRITES its artifact to disk and returns status only (see
+// WRITTEN_SCHEMA); later agents Read earlier artifacts from disk. The workflow
+// never holds report text.
 phase('Synthesize')
+const DRAFT_PATH = `${RUN_DIR}/unreviewed_report.md`
+const REVIEW_PATH = `${RUN_DIR}/review.md`
+const FINAL_PATH = `${RUN_DIR}/final_report.md`
 let draft = null
 let review = null
 let reviewOk = false
 let final = null
-if (flat.length) {
+const draftOk = () => !!(draft && draft.written && draft.bytes > 0)
+const finalOk = () => !!(final && final.written && final.bytes > 0)
+
+if (RETRIEVAL_OFF) {
+  // Control run: author-only, from memory. Same structure rules, no ledger; the
+  // Methodology block states exactly what was (not) done, and the rest of the
+  // tail is skipped — a review against no evidence would measure nothing.
+  draft = await agent(
+    'You are the author in a deep-research pipeline running in RETRIEVAL-OFF control mode: no ' +
+    'sources were retrieved, so you write from your own knowledge alone. Do NOT run git commands, ' +
+    'and do NOT search, fetch, or read anything.\n\n' +
+    'The METHODOLOGY BLOCK for the mandatory "## Methodology" section is between the METHODOLOGY ' +
+    'BEGIN/END markers at the bottom (markers excluded).\n\n' +
+    `Write a synthesis report in Markdown answering:\n"${QUESTION}"\n\n` +
+    (BRIEF ? 'Honor the locked pre-run BRIEF (audience, register, non-goals):\n--- BRIEF BEGIN ---\n' + BRIEF + '\n--- BRIEF END ---\n\n' : '') +
+    'Rules (MANDATORY):\n' +
+    '- Cite with GitHub-style Markdown footnotes: [^n] inline after each substantive factual ' +
+    'statement, ONE footnote per source, numbered in order of first citation and reused for later ' +
+    'citations of that source; definitions at the very END of the document, format ' +
+    '"[^n]: {authors} ({year}). {title}. {venue}. {url}", naming only sources you believe really ' +
+    'exist. Never invent a source to fill a footnote — leave the statement uncited instead.\n' +
+    '- Hedge in the sentence itself every statement you are not sure of. Formal survey register, no ' +
+    'first person, no absolutes built on thin evidence.\n' +
+    REPORT_STRUCTURE + '\n' +
+    `Write the complete report to ${DRAFT_PATH} with the Write tool (overwrite any existing ` +
+    'content). Return in your structured output: written=true and bytes=the size of the file you ' +
+    'wrote (written=false, bytes=0 if you could not), and notes (anomalies, one line each; empty ' +
+    'string if none). Do NOT return the report text.\n\n' +
+    METHODOLOGY_BLOCK,
+    { label: 'author (retrieval off)', phase: 'Synthesize', schema: WRITTEN_SCHEMA }
+  )
+  if (!draftOk()) log('Author wrote no report (retrieval-off control run)')
+} else if (flat.length) {
   draft = await agent(
     'You are the author in a deep-research pipeline: draft a synthesis report from an evidence ' +
     'ledger. Do NOT run git commands.\n\n' +
@@ -890,62 +1052,70 @@ if (flat.length) {
     `Write a synthesis report in Markdown answering:\n"${QUESTION}"\n\n` +
     (BRIEF ? 'Honor the locked pre-run BRIEF (audience, register, non-goals):\n--- BRIEF BEGIN ---\n' + BRIEF + '\n--- BRIEF END ---\n\n' : '') +
     SYNTHESIS_RULES + '\n' + REPORT_STRUCTURE + '\n' +
-    `Write the complete draft to ${RUN_DIR}/unreviewed_report.md with the Write tool (overwrite any ` +
-    'existing content from a previous attempt of this run — never reuse it).\n\n' +
-    'Return in your structured output: draft EXACTLY as written to the file, and notes ' +
-    '(anomalies, one line each; empty string if none).\n\n' +
+    `Write the complete draft to ${DRAFT_PATH} with the Write tool (overwrite any existing ` +
+    'content from a previous attempt of this run — never reuse it).\n\n' +
+    'Return in your structured output: written=true and bytes=the size of the file you wrote ' +
+    '(written=false, bytes=0 if you could not), and notes (anomalies, one line each; empty string ' +
+    'if none). Do NOT return the draft text.\n\n' +
     LEDGER_BLOCK + '\n\n' + METHODOLOGY_BLOCK,
-    { label: 'author', phase: 'Synthesize', schema: DRAFT_SCHEMA }
+    { label: 'author', phase: 'Synthesize', schema: WRITTEN_SCHEMA }
   )
-  if (!draft || !draft.draft) log('Author returned no draft; no report')
+  if (!draftOk()) log('Author wrote no draft; no report')
+} else {
+  log('No sources survived verification; skipping synthesis')
 }
 
-if (draft && draft.draft) {
+if (draftOk() && !RETRIEVAL_OFF) {
   const reviewTask =
     'You are an adversarial reviewer in a deep-research pipeline. Find genuine faults in a ' +
     'synthesis report by checking it against the evidence ledger it claims to be derived from. ' +
     'You did not write this report; your job is to break it, fairly.\n\n' +
     `The report answers the research question:\n"${QUESTION}"\n\n` +
-    REVIEW_CRITERIA
-  if (REVIEWER.type === 'codex-cli') {
-    // External-model review via the codex CLI. The invariants for this call are
-    // load-bearing: permission allow rules are PREFIX rules, and an unmatched
-    // command from a background agent is not denied — it silently runs in a
-    // no-network sandbox where codex produces nothing. Hence: single line,
-    // starts with the configured command, prompt staged in a file, one Bash
-    // call, never retried. The prompt reaches codex via stdin redirect, never
-    // "$(cat file)": a review prompt easily exceeds Linux's ~128 KiB
-    // per-argument limit, and the resulting E2BIG surfaces as exit 127 —
-    // indistinguishable from command-not-found. A redirect does not break
-    // prefix matching.
+    REVIEW_CRITERIA + '\n\n' +
+    // The archived pages let a tool-equipped reviewer settle a doubt at the
+    // source instead of at the ledger's summary of it.
+    `Archived page text for every source is under ${PAGES_DIR} (s{i}.txt corresponds to ledger ` +
+    'key S{i}). If you have file tools and a statement\'s support is in doubt, check the page ' +
+    'before calling it a status error.'
+  if (REVIEWER.type === 'cli') {
+    // External-model review through a command-line tool (pi, codex, ...). The
+    // invariants for this call are load-bearing: permission allow rules are
+    // PREFIX rules, and an unmatched command from a background agent is not
+    // denied — it silently runs in a no-network sandbox where the CLI produces
+    // nothing. Hence: single line, starts with the configured command, prompt
+    // staged in a file and passed by PATH (never "$(cat file)": large prompts
+    // exceed Linux's ~128 KiB per-argument limit and die with exit 127), stdout
+    // redirected straight into review.md, one Bash call, never retried.
+    const promptPath = `${RUN_DIR}/review-prompt-${RUN_TAG}.txt`
+    // Paths are single-quoted: a run dir with a space would otherwise split the
+    // command. The shell strips the quotes, so `@'/path'` reaches pi as `@/path`.
+    const command = REVIEWER.command.split('{prompt}').join(`'${promptPath}'`) + ` > '${REVIEW_PATH}' 2>/dev/null`
     review = await agent(
       'You are a relay: obtain an adversarial review of a report from an external reviewer model ' +
-      'via the Codex CLI. Do NOT run git commands. Do NOT review the report yourself.\n\n' +
-      `(a) Write the review prompt (exactly the text between REVIEW-PROMPT BEGIN/END markers below, ` +
-      `markers excluded) to ${RUN_DIR}/review-prompt-${RUN_TAG}.txt with the Write tool (overwrite ` +
-      'any existing content).\n' +
-      `(b) Run this as ONE Bash tool call with timeout 600000 ms:\n` +
-      `${REVIEWER.command} - < ${RUN_DIR}/review-prompt-${RUN_TAG}.txt 2>/dev/null\n` +
-      'CRITICAL: the command must stay a SINGLE LINE exactly as given — the prompt goes to the CLI ' +
-      'via the stdin redirect (NEVER "$(cat file)": large prompts exceed the per-argument limit and ' +
-      'die with exit 127); no cd, echo, variables, heredocs, no combining with && or ; or |. It may ' +
-      'take several minutes; NEVER retry it, even on error or empty output.\n' +
-      `(c) Write the command's stdout verbatim to ${RUN_DIR}/review.md and return it as review with ` +
-      'review_ok=true. If it printed nothing, errored, or was denied, instead write ' +
-      `"REVIEW-ERROR: " plus what happened to ${RUN_DIR}/review.md, and return that string as ` +
-      'review with review_ok=false.\n\n' +
+      'via a command-line tool. Do NOT run git commands. Do NOT review the report yourself.\n\n' +
+      `(a) Read the draft at ${DRAFT_PATH} with the Read tool. Then write ONE file, ${promptPath}, ` +
+      'with the Write tool (overwrite any existing content) containing, in this order: the text ' +
+      'between the REVIEW-PROMPT BEGIN/END markers below (markers excluded); a line ' +
+      '"--- DRAFT BEGIN ---"; the draft EXACTLY as read; a line "--- DRAFT END ---"; and finally ' +
+      'the line: "Output ONLY the review in Markdown. If you cannot complete this, say so ' +
+      'explicitly and state what you inspected."\n' +
+      `(b) Run this as ONE Bash tool call with timeout 600000 ms:\n${command}\n` +
+      'CRITICAL: the command must stay a SINGLE LINE exactly as given — no cd, echo, variables, ' +
+      'heredocs, no combining with && or ; or |, and no "$(cat ...)". It may take several ' +
+      'minutes; NEVER retry it, even on error or empty output.\n' +
+      `(c) The command wrote its output to ${REVIEW_PATH}. Check that file with the Read tool. If ` +
+      'it holds a review, return review_ok=true, bytes=its size, notes="". If it is empty, holds ' +
+      'only an error message, or the command was denied, overwrite it with "REVIEW-ERROR: " plus ' +
+      'what happened and return review_ok=false, bytes=0, notes=the reason.\n\n' +
       '--- REVIEW-PROMPT BEGIN ---\n' +
       reviewTask + '\n\n' +
       'The evidence ledger (ground truth) and the report under review follow.\n\n' +
-      LEDGER_BLOCK + '\n\n' +
-      '--- DRAFT BEGIN ---\n' + draft.draft + '\n--- DRAFT END ---\n\n' +
-      'Output ONLY the review in Markdown. If you cannot complete this, say so explicitly and ' +
-      'state what you inspected.\n' +
+      LEDGER_BLOCK + '\n' +
       '--- REVIEW-PROMPT END ---',
-      // The relay is mechanical (stage file, one Bash call, return stdout) — it
+      // The relay is mechanical (stage file, one Bash call, check a file) — it
       // never inherits the main-loop model; the external model does the review.
-      { label: '[codex] review', phase: 'Synthesize', schema: REVIEW_SCHEMA,
-        model: REVIEWER.wrapperModel || 'opus' }
+      { label: `${REVIEWER.command.startsWith('codex') ? '[codex]' : '[cli]'} review`, phase: 'Synthesize',
+        schema: REVIEW_SCHEMA, model: RELAY_MODEL, effort: 'low' }
     )
   } else {
     // Default: a fresh-context Claude reviewer. Separate context is the point —
@@ -954,126 +1124,50 @@ if (draft && draft.draft) {
     if (REVIEWER.model && REVIEWER.model !== 'inherit') opts.model = REVIEWER.model
     review = await agent(
       reviewTask + '\n\n' +
-      'The ledger is between the LEDGER BEGIN/END markers at the bottom. ' + LEDGER_SHAPE + '\n\n' +
-      `Write the complete review to ${RUN_DIR}/review.md with the Write tool (overwrite any ` +
-      'existing content), and return it as review with review_ok=true, notes for anomalies ' +
-      '(empty string if none). If you cannot complete the review, write and return ' +
-      '"REVIEW-ERROR: " plus the reason, with review_ok=false.\n\n' +
-      LEDGER_BLOCK + '\n\n' +
-      '--- DRAFT BEGIN ---\n' + draft.draft + '\n--- DRAFT END ---',
+      `Read the draft under review at ${DRAFT_PATH} with the Read tool. The ledger is between the ` +
+      'LEDGER BEGIN/END markers at the bottom. ' + LEDGER_SHAPE + '\n\n' +
+      `Write the complete review to ${REVIEW_PATH} with the Write tool (overwrite any existing ` +
+      'content) and return review_ok=true, bytes=its size, and notes for anomalies (empty string ' +
+      'if none). Do NOT return the review text. If you cannot complete the review, write ' +
+      '"REVIEW-ERROR: " plus the reason to that file and return review_ok=false, bytes=0, notes=the ' +
+      'reason.\n\n' +
+      LEDGER_BLOCK,
       opts
     )
   }
-  reviewOk = !!(review && review.review_ok && review.review && !review.review.startsWith('REVIEW-ERROR'))
-  if (!reviewOk) log(`Review unavailable (${review && review.notes ? review.notes : 'no details'}); final report will be the unreviewed draft`)
+  reviewOk = !!(review && review.review_ok && review.bytes > 0)
+  if (!reviewOk) log(`Review unavailable (${review && review.notes ? review.notes : 'no details'}); the unreviewed draft is the canonical report`)
 }
 
-if (draft && draft.draft && reviewOk) {
+if (draftOk() && reviewOk) {
   final = await agent(
     'You are the adjudicator in a deep-research pipeline: revise a draft report by incorporating ' +
     'an adversarial review of it. Do NOT run git commands.\n\n' +
     REVISE_RULES + '\n\n' +
     'The ledger is between the LEDGER BEGIN/END markers at the bottom. ' + LEDGER_SHAPE + '\n' +
-    'The draft and the review follow it.\n\n' +
-    `Write the complete final report to ${RUN_DIR}/final_report.md with the Write tool (overwrite ` +
-    'any existing content), and return it as report, with notes listing each review finding you ' +
-    'REJECTED and why, one line each (empty string if you applied everything).\n\n' +
-    LEDGER_BLOCK + '\n\n' +
-    '--- DRAFT BEGIN ---\n' + draft.draft + '\n--- DRAFT END ---\n\n' +
-    '--- REVIEW BEGIN ---\n' + review.review + '\n--- REVIEW END ---',
-    { label: 'adjudicate', phase: 'Synthesize', schema: FINAL_SCHEMA }
+    `Read the draft at ${DRAFT_PATH} and the review at ${REVIEW_PATH} with the Read tool.\n\n` +
+    `Write the complete final report to ${FINAL_PATH} with the Write tool (overwrite any existing ` +
+    'content) and return written=true, bytes=its size, and notes listing each review finding you ' +
+    'REJECTED and why, one line each (empty string if you applied everything). Do NOT return the ' +
+    'report text.\n\n' +
+    LEDGER_BLOCK,
+    { label: 'adjudicate', phase: 'Synthesize', schema: WRITTEN_SCHEMA }
   )
-  if (!final || !final.report) log('Adjudicator returned no report; falling back to the unreviewed draft')
-} else if (flat.length && !draft) {
-  log('No draft produced; skipping review and adjudication')
-} else if (!flat.length) {
-  log('No sources survived verification; skipping synthesis')
+  if (!finalOk()) log('Adjudicator wrote no report; the unreviewed draft is the canonical report')
 }
 
-// ------------------------------------------- Citation check (mechanical, no agent)
-// Every inline cite must resolve to a ledger key; every bibliography entry must
-// contain its key's ledger url verbatim, both directions, no orphans. Validation
-// only — no auto-fix; failures are recorded for the run notes, not repaired,
-// because a checker that edits the report stops being a check.
-function checkCitations(reportMd) {
-  const validKeys = new Set(ledger.sources.map(s => s.key))
-  const urlByKey = {}
-  for (const s of ledger.sources) urlByKey[s.key] = s.source
-  const headingMatch = reportMd.match(/^##\s+Sources\s*$/m)
-  const body = headingMatch ? reportMd.slice(0, headingMatch.index) : reportMd
-  const bib = headingMatch ? reportMd.slice(headingMatch.index + headingMatch[0].length) : ''
-  // Tolerant inline extraction: any S{n} token inside any bracket pair, so [S3, S5]
-  // and [S3*] still count their keys even where the rules constrain the style.
-  const inlineKeySet = new Set()
-  for (const br of body.match(/\[[^\]]*\]/g) || []) {
-    for (const k of br.match(/S\d+/g) || []) inlineKeySet.add(k)
-  }
-  const inlineKeys = Array.from(inlineKeySet)
-  const bibEntries = []
-  for (const line of bib.split('\n')) {
-    const km = line.match(/\[(S\d+)\]/)
-    if (km) bibEntries.push({ key: km[1], line: line })
-  }
-  const bibKeys = bibEntries.map(e => e.key)
-  const unknownInline = inlineKeys.filter(k => !validKeys.has(k))
-  const unknownBib = bibKeys.filter(k => !validKeys.has(k))
-  const duplicateBib = bibKeys.filter((k, i) => bibKeys.indexOf(k) !== i)
-  const citedNotInBib = inlineKeys.filter(k => validKeys.has(k) && !bibKeys.includes(k))
-  const bibNotCited = bibKeys.filter(k => validKeys.has(k) && !inlineKeySet.has(k))
-  const urlMismatches = bibEntries
-    .filter(e => validKeys.has(e.key) && !e.line.includes(urlByKey[e.key]))
-    .map(e => e.key)
-  const problems = (headingMatch ? 0 : 1) + unknownInline.length + unknownBib.length +
-    duplicateBib.length + citedNotInBib.length + bibNotCited.length + urlMismatches.length
-  return {
-    ok: problems === 0 && inlineKeys.length > 0,
-    has_sources_section: !!headingMatch,
-    inline_keys_cited: inlineKeys.length,
-    unknown_inline_keys: unknownInline,
-    unknown_bib_keys: unknownBib,
-    duplicate_bib_keys: duplicateBib,
-    cited_but_missing_from_bib: citedNotInBib,
-    bib_entries_never_cited: bibNotCited,
-    url_mismatches: urlMismatches,
-  }
-}
-
-// Methodology check (mechanical): the block must appear verbatim in the report.
-function checkMethodology(reportMd) {
-  return reportMd.includes(methodologyMd)
-}
-
-// Canonical report: the adjudicated final, falling back to the unreviewed draft.
-let report = ''
-let reportSource = 'none'
-if (final && final.report) {
-  report = final.report
-  reportSource = 'final'
-} else if (draft && draft.draft) {
-  report = draft.draft
-  reportSource = 'draft'
-  log('Canonical report: falling back to unreviewed draft')
-} else {
-  log('No report produced')
-}
-
-const citationCheck = report ? checkCitations(report) : null
-const methodologyCheck = report ? checkMethodology(report) : null
-if (!citationCheck) {
-  log('Citation check: no report to check')
-} else if (citationCheck.ok) {
-  log(`Citation check: CLEAN — ${citationCheck.inline_keys_cited} distinct keys cited`)
-} else {
-  log(`Citation check: PROBLEMS — ${JSON.stringify(citationCheck)}`)
-}
-if (methodologyCheck === false) log('Methodology check: block NOT verbatim in report')
+// Which file the orchestrating session's assemble-report.py will promote to
+// report.md. Recorded here so the run record and the file on disk agree.
+const reportSource = finalOk() ? 'final' : draftOk() ? 'draft' : 'none'
+if (reportSource === 'none') log('No report produced')
 
 // ------------------------------------ Verification appendix (mechanical)
-// Appended to the CANONICAL report string after the checks; the report files on
-// disk stay as authored. Per-claim verdicts live here instead of as inline
-// status tags in prose, keeping the body readable while every claim stays
-// auditable.
-const appendixMd = [
+// Returned as a string; assemble-report.py appends it to the canonical
+// report.md (the authored files on disk stay as authored). Per-claim verdicts
+// live here instead of as inline status tags in prose, keeping the body
+// readable while every claim stays auditable. check-report.py validates the
+// footnote wiring and the Methodology block against this run record.
+const appendixMd = RETRIEVAL_OFF ? '' : [
   '## Appendix A: Verification ledger',
   '',
   `Per-claim verification detail. Each verified claim received ${VOTES_PER_CLAIM} independent ` +
@@ -1091,40 +1185,51 @@ const appendixMd = [
   return [head, ''].concat(claimLines).concat(leadLines).join('\n')
 })).join('\n\n')
 
-if (report) report = report + '\n\n' + appendixMd
-
 // The full run record. The orchestrating session persists results.json (this
-// whole object), report.md (the canonical `report` field), and notes.md from it.
+// whole object) and then runs assemble-report.py (report.md, report_plain.md),
+// check-report.py, and check-quotes.py against the run folder.
 return {
   question: QUESTION,
   blocklist: BLOCKLIST,
   run_tag: RUN_TAG,
   run_dir: RUN_DIR,
   pipeline: { version: PIPELINE_VERSION, template_sha256: TEMPLATE_SHA256 },
+  retrieval_off: RETRIEVAL_OFF,
   caps: { fetch_min: FETCH_MIN, fetch_max: FETCH_MAX, fetch_min_r2: FETCH_MIN_R2, fetch_max_r2: FETCH_MAX_R2, r2_angles: R2_ANGLES, seeds: SEED_SOURCES.length, verifier: VERIFIER, verify_claims_per_source: VERIFY_CLAIMS_PER_SOURCE, votes_per_claim: VOTES_PER_CLAIM, extraction: 'uncapped, ranked by centrality' },
-  models: { worker: WORKER, verifier: VERIFIER, reviewer: REVIEWER.type === 'codex-cli' ? 'codex-cli' : `claude:${REVIEWER.model || 'inherit'}` },
+  models: {
+    session: SESSION_MODEL,
+    worker: WORKER,
+    verifier: VERIFIER,
+    reviewer: REVIEWER.type === 'cli' ? `cli:${REVIEWER_LABEL}` : `claude:${REVIEWER.model || 'inherit'}`,
+    reviewer_command: REVIEWER.type === 'cli' ? REVIEWER.command : '',
+    relay: REVIEWER.type === 'cli' ? RELAY_MODEL : '',
+  },
   rounds: {
     r0: { seeds: seedPicked.map(s => s.url) },
-    r1: { angles: runAngles, angles_source: ANGLES.length ? 'hardcoded' : 'scope-generated', unique_found: r1.found, high_quality: r1.high_quality, fetched: r1.picked.map(s => s.url), reranked: r1.reranked },
-    r2: { angles: gapAngles, unique_found: r2.found, high_quality: r2.high_quality, fetched: r2.picked.map(s => s.url), reranked: r2.reranked },
+    r1: { angles: RETRIEVAL_OFF ? [] : runAngles, angles_source: RETRIEVAL_OFF ? 'skipped' : ANGLES.length ? 'hardcoded' : 'scope-generated', unique_found: r1.found, high_quality: r1.high_quality, fetched: r1.picked.map(s => s.url), not_fetched: r1.dropped.map(s => s.url), reranked: r1.reranked },
+    r2: { angles: gapAngles, unique_found: r2.found, high_quality: r2.high_quality, fetched: r2.picked.map(s => s.url), not_fetched: r2.dropped.map(s => s.url), reranked: r2.reranked },
   },
   gap_analysis: gapAnalysis,
   search_unique_sources: allFound.map(s => s.url),
+  // The triage pool: every unique candidate a search produced, with its
+  // snippet. "Sources" in the ledger are only the fetched, archived subset.
+  search_pool: allFound.map(s => ({ url: s.url, title: s.title || '', snippet: s.snippet || '', relevance: s.relevance || '', round: s.round || '' })),
   fetched: seedPicked.concat(r1.picked, r2.picked).map(s => s.url),
   results: flat,
   tally: tally,
   calibration: calibration,
+  ledger: ledger,
   methodology: methodologyMd,
   appendix: appendixMd,
   synthesis: {
-    draft: draft ? draft.draft : '',
-    review: review ? review.review : '',
-    report: final ? final.report : '',
+    draft_written: draftOk(),
+    draft_bytes: draft ? draft.bytes : 0,
     review_ok: reviewOk,
+    review_bytes: review ? review.bytes : 0,
+    final_written: finalOk(),
+    final_bytes: final ? final.bytes : 0,
     notes: [draft && draft.notes, review && review.notes, final && final.notes].filter(Boolean).join(' | '),
   },
-  citation_check: citationCheck,
-  methodology_check: methodologyCheck,
   report_source: reportSource,
-  report: report,
+  report_files: { draft: DRAFT_PATH, review: REVIEW_PATH, final: FINAL_PATH },
 }

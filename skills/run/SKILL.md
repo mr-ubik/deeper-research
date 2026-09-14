@@ -37,21 +37,26 @@ which reviewer and default depth they want, then write the file:
 
 Those are the sane defaults — a user who says "defaults are fine" gets exactly
 this file. `reviewer.model: "inherit"` means the session's model reviews from a
-fresh context. Users with the OpenAI Codex CLI configured can opt into a
-second-model review instead:
+fresh context. Users with a command-line agent for a second model family (the
+`pi` coding agent, the OpenAI Codex CLI) can opt into a second-model review
+instead:
 
 ```json
-"reviewer": { "type": "codex-cli", "label": "<reviewer model name>",
-              "command": "codex exec --skip-git-repo-check --sandbox read-only -m <model> -c model_reasoning_effort=\"high\"",
-              "wrapperModel": "opus" }
+"reviewer": { "type": "cli", "label": "gpt-5.6-sol",
+              "command": "pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking high --model openai-codex/gpt-5.6-sol @{prompt}",
+              "wrapperModel": "sonnet" }
 ```
 
-The `command` must be the exact single-line prefix their permission allowlist
-matches (see README → External reviewer). `wrapperModel` (default `opus`) is
-the model of the relay agent that stages the prompt and runs the CLI — the
-external model does the reviewing, so the relay never needs the session model.
-Never select `codex-cli` for a user who hasn't confirmed the CLI works in
-their environment.
+`command` is ONE line containing the placeholder `{prompt}`; the relay replaces
+it with the staged prompt file's path and appends a stdout redirect into
+`review.md`. The text before the placeholder must be the exact prefix their
+permission allowlist matches (see README → External reviewer). For the Codex
+CLI the command is `codex exec --skip-git-repo-check --sandbox read-only -m <model> -c model_reasoning_effort=\"high\" - < {prompt}`;
+the legacy `"type": "codex-cli"` with a bare prefix still works and gets the
+stdin form appended. `wrapperModel` (default: the worker model) is the relay
+agent that stages the prompt and runs the CLI — the external model does the
+reviewing, so the relay is deliberately cheap. Never select a `cli` reviewer
+for a user who hasn't confirmed the command works in their environment.
 
 Depth presets (a config `caps` object with the same keys as the template's
 `args.caps` overrides any preset):
@@ -134,7 +139,11 @@ launch:
   gave a local file), `angles` (the locked set from plan.md; omit without a
   plan and the workflow's Scope agent derives them), `blocklist`, `caps` from
   the depth preset, `workerModel`, `verifierModel`, `reviewer` from config,
-  `pipelineVersion` and `templateSha256` from step 3.3.
+  `pipelineVersion` and `templateSha256` from step 3.3, and `sessionModel`
+  (the exact model id of this session — informational, recorded so the run
+  record names every role's model). `retrievalOff: true` exists only for
+  benchmark control runs (author writes from memory, no retrieval, no
+  review); never set it for a research run.
 
 Launch with the Workflow tool: `{ scriptPath: <absolute path to the frozen
 copy>, args }` — pass `args` as a real JSON object, never a stringified one.
@@ -150,28 +159,42 @@ Done when: the workflow has returned its result object.
 
 ## 5. Persist and gate
 
-The workflow cannot write files; you persist everything from its return value.
-The tail agents already wrote `unreviewed_report.md`, `review.md`, and
-`final_report.md` into the run folder — verify all three exist and are
-non-trivial (a failed review leaves `review.md` starting with `REVIEW-ERROR:`).
+The workflow cannot write files; you persist its return value and assemble the
+report from the files its tail agents wrote. The tail agents wrote
+`unreviewed_report.md`, `review.md`, and `final_report.md` into the run folder
+(a failed review leaves `review.md` starting with `REVIEW-ERROR:`; a failed
+adjudication leaves no `final_report.md`). Let `SCRIPTS` be
+`<this skill's directory>/scripts`.
 
-1. `results.json` — the full return object, pretty-printed.
-2. `report.md` — the `report` field verbatim (it ends with the mechanical
-   "Appendix A: Verification ledger").
-3. Run the quote gate:
-   `python3 <this skill's directory>/scripts/check-quotes.py <runDir>`.
-4. `notes.md` — always include: the calibration tally (strict/soft detection,
-   fooled count), the `citation_check` summary, `methodology_check`, round-2
-   stats (gaps found, angles, new sources), the quote-gate tally including the
-   strict/lenient split, and one line per anomaly with its explanation.
+1. `results.json` — the full return object, pretty-printed. Its
+   `report_source` says which file is canonical (`final`, or `draft` when
+   review or adjudication failed).
+2. `python3 $SCRIPTS/assemble-report.py <runDir>` — writes `report.md`
+   (the canonical file plus the mechanical "Appendix A: Verification
+   ledger") and `report_plain.md` (no Methodology section, no appendix; the
+   file to hand to a blind comparison). Prints which source it promoted.
+3. `python3 $SCRIPTS/check-report.py <runDir>` — the citation gate: every
+   footnote reference has a definition and vice versa, every definition
+   carries exactly one ledger URL verbatim, no source is defined twice, and
+   the Methodology block appears verbatim. Prints a JSON summary plus one
+   `PROBLEM` line per fault.
+4. `python3 $SCRIPTS/check-quotes.py <runDir>` — the quote gate.
+5. `notes.md` — always include: a `models` line with the exact model id of
+   every role (session, worker, verifier, reviewer, relay), the calibration
+   tally (strict/soft detection with vote counts, fooled count), the
+   check-report summary, round-2 stats (gaps found, angles, new sources), the
+   quote-gate tally including the strict/lenient split, and one line per
+   anomaly with its explanation.
 
 A run passes only when every gate is CLEAN or every flagged line in `notes.md`
 has an explanation: LENIENT-ONLY lines are benign PDF-hyphenation absorptions;
-MISMATCH lines must each be investigated and explained before the run counts
-as passed. A decoy vote marked `supported` means the verifier was fooled —
-report it prominently, never quietly.
+`PROBLEM` and MISMATCH lines must each be investigated and explained before the
+run counts as passed. A decoy vote marked `supported` means the verifier was
+fooled — report it prominently, never quietly. A `decoy_quote_on_page`
+mismatch means a decoy was not false — that decoy's votes measure nothing.
 
-Done when: all four artifacts are written and every gate is CLEAN or explained.
+Done when: `results.json`, `report.md`, `report_plain.md`, and `notes.md` are
+written and every gate is CLEAN or explained.
 
 ## 6. Deliver
 

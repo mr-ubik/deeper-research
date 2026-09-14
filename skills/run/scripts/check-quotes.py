@@ -5,6 +5,7 @@ Re-greps every voted claim's evidence quote against the persisted page text in
 {run_dir}/pages/ and compares the mechanical result with each vote's
 quote_found field. Catches votes that credit a paraphrased quote as found, and
 broken decoys (a decoy's fabricated quote must NOT be present on the page).
+Missing quote_found fields are mismatches unless the vote verdict is "error".
 
 Quotes are checked at two levels. STRICT is verbatim presence after
 punctuation/whitespace normalization; LENIENT additionally collapses PDF
@@ -32,10 +33,20 @@ _PUNCT = {
 }
 
 
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+
+
 def normalize(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)
     for k, v in _PUNCT.items():
         text = text.replace(k, v)
+    # Fetch tools persist pages as Markdown; a quote copies the link TEXT, not
+    # the markup, so "[write-ahead log](wal.html)" must compare as "write-ahead log".
+    # Extractors also drop or keep inline-code backticks and link brackets
+    # inconsistently ("`visibility_timeout`", "[Redis transport has to emulate
+    # it]"), so both markup characters are removed on both sides.
+    text = _MD_LINK.sub(r"\1", text)
+    text = text.replace("`", "").replace("[", "").replace("]", "")
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -60,10 +71,14 @@ def quote_on_page(quote: str, page: str) -> str:
     so a long fragment is kept regardless of its word count. 'lenient' means
     found only after dehyphenating both sides (PDF hyphenation artifacts).
     """
-    fragments = [f.strip(" .,;:") for f in re.split(r"\.{3,}", normalize(quote))]
+    normalized_quote = normalize(quote)
+    fragments = [f.strip(" .,;:") for f in re.split(r"\.{3,}", normalized_quote)]
     fragments = [f for f in fragments if len(f.split()) > 3 or len(f) >= 20]
     if not fragments:
-        return "absent"
+        fallback = normalized_quote.strip(" .,;:")
+        if not fallback:
+            return "absent"
+        fragments = [fallback]
     if all(f in page for f in fragments):
         return "strict"
     lenient_page = dehyphenate(page)
@@ -84,9 +99,13 @@ def main() -> int:
     tally = {"votes_checked": 0, "agree": 0,
              "vote_said_found_page_disagrees": 0,
              "vote_said_missing_page_disagrees": 0,
+             "votes_missing_quote_found": 0,
              "quotes_checked": 0, "quotes_strict": 0,
              "quotes_lenient_only": 0, "quotes_absent": 0,
+             "quotes_short": 0,
              "decoys_checked": 0, "decoy_quote_reported_found": 0,
+             "decoy_quotes_checked": 0, "decoy_quotes_on_page": 0,
+             "decoy_quotes_unavailable": 0,
              "pages_missing": 0}
 
     for si, res in enumerate(results.get("results", [])):
@@ -105,7 +124,14 @@ def main() -> int:
         page = normalize(page_path.read_text(errors="replace"))
 
         for ci, claim in enumerate(res.get("claims", [])):
-            level = quote_on_page(claim.get("quote", ""), page)
+            quote = claim.get("quote", "")
+            normalized_quote = normalize(quote)
+            candidates = [f.strip(" .,;:") for f in
+                          re.split(r"\.{3,}", normalized_quote)]
+            if (normalized_quote.strip(" .,;:") and not any(
+                    len(f.split()) > 3 or len(f) >= 20 for f in candidates)):
+                tally["quotes_short"] += 1
+            level = quote_on_page(quote, page)
             found = level != "absent"
             tally["quotes_checked"] += 1
             tally["quotes_strict" if level == "strict" else
@@ -115,9 +141,15 @@ def main() -> int:
                 lenient_only.append(
                     (si, f"claim {ci}: {claim.get('quote', '')[:100]!r}"))
             for vi, vote in enumerate(claim.get("votes", [])):
-                if vote.get("verdict") == "error" or "quote_found" not in vote:
+                if vote.get("verdict") == "error":
                     continue
                 tally["votes_checked"] += 1
+                if "quote_found" not in vote:
+                    tally["votes_missing_quote_found"] += 1
+                    mismatches.append(
+                        (si, "vote_missing_quote_found",
+                         f"claim {ci} vote {vi}: {quote[:100]!r}"))
+                    continue
                 if bool(vote["quote_found"]) == found:
                     tally["agree"] += 1
                 elif vote["quote_found"]:
@@ -131,13 +163,22 @@ def main() -> int:
                         (si, "vote_missing_but_present",
                          f"claim {ci} vote {vi}: {claim.get('quote', '')[:100]!r}"))
 
-        # Decoy quotes are fabricated and not persisted in results.json, so we
-        # can't grep them; but every decoy vote must report quote_found=false —
-        # a true here means the "fabricated" quote exists on the page (broken
-        # decoy) or the verifier misread the page.
+        # Newer results persist the fabricated decoy quote, so grep it when
+        # available. Older runs omit it and are tallied as unavailable. Every
+        # decoy vote must independently report quote_found=false.
         cal = res.get("calibration")
         if cal:
             tally["decoys_checked"] += 1
+            decoy_quote = cal.get("quote")
+            if isinstance(decoy_quote, str) and decoy_quote.strip():
+                tally["decoy_quotes_checked"] += 1
+                decoy_level = quote_on_page(decoy_quote, page)
+                if decoy_level != "absent":
+                    tally["decoy_quotes_on_page"] += 1
+                    mismatches.append(
+                        (si, "decoy_quote_on_page", repr(decoy_quote[:100])))
+            else:
+                tally["decoy_quotes_unavailable"] += 1
             for vi, vote in enumerate(cal.get("votes", [])):
                 if vote.get("quote_found"):
                     tally["decoy_quote_reported_found"] += 1
