@@ -33,10 +33,16 @@ _PUNCT = {
 }
 
 
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+
+
 def normalize(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)
     for k, v in _PUNCT.items():
         text = text.replace(k, v)
+    # Fetch tools persist pages as Markdown; a quote copies the link TEXT, not
+    # the markup, so "[write-ahead log](wal.html)" must compare as "write-ahead log".
+    text = _MD_LINK.sub(r"\1", text)
     return re.sub(r"\s+", " ", text).strip()
 
 

@@ -246,3 +246,24 @@ class ReviewFollowupTests(unittest.TestCase):
             self.assertTrue(data["ok"])
             self.assertEqual(data["ledger_checks"], "not-applicable (retrieval off)")
             self.assertEqual(data["definitions_without_ledger_url"], [])
+
+
+    def test_quote_matches_through_markdown_link_markup(self):
+        page = "Applies when SQLite is not using a [write-ahead log](wal.html). More words."
+        quote = "Applies when SQLite is not using a write-ahead log."
+        self.assertEqual(quotes.quote_on_page(quote, quotes.normalize(page)), "strict")
+
+    def test_check_report_flags_authored_appendix(self):
+        report = ("# R\n\nA fact.[^1]\n\n## Appendix A: Claims and verdicts\n\nstuff\n\n"
+                  "[^1]: T. https://x.example/a\n\nM\n\n"
+                  "## Appendix A: Verification ledger\n\nmechanical\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.make_run(root, {"results": [{"source": "https://x.example/a", "title": "T",
+                                             "fetch_ok": True}], "methodology": "M"},
+                          {"report.md": report})
+            code, out = self.run_module(reports, "check-report.py", root)
+            data = json.JSONDecoder().raw_decode(out)[0]
+            self.assertEqual(code, 1)
+            self.assertEqual(data["authored_appendix"], ["## Appendix A: Claims and verdicts"])
+            self.assertIn("PROBLEM authored_appendix", out)

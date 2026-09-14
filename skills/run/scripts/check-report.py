@@ -45,6 +45,11 @@ def inspect_report(report, data):
 
     appendix = APPENDIX_RE.search(report)
     checked = report[:appendix.start()] if appendix else report
+    # The verification appendix is attached by assemble-report.py AFTER
+    # authoring. Any appendix heading in the authored part means an agent wrote
+    # one itself — usually a reviewer "fixing" its absence — and the report now
+    # carries two.
+    authored_appendix = re.findall(r"^## Appendix.*$", checked, re.M)
     body_lines = []
     definitions = {}
     definition_order = []
@@ -104,7 +109,8 @@ def inspect_report(report, data):
     methodology_ok = None if methodology is None else methodology in report
     problems = [refs_without_definition, definitions_never_referenced,
                 duplicate_labels, definitions_without_ledger_url,
-                definitions_with_multiple_urls, duplicate_source_definitions]
+                definitions_with_multiple_urls, duplicate_source_definitions,
+                authored_appendix]
     ok = all(not problem for problem in problems) and bool(inline_labels) \
         and methodology_ok is not False
     return {
@@ -117,6 +123,7 @@ def inspect_report(report, data):
         "duplicate_source_definitions": duplicate_source_definitions,
         "sources_cited": sources_cited,
         "fetch_failed_cited": failed,
+        "authored_appendix": authored_appendix,
         "methodology_ok": methodology_ok,
         "ledger_checks": "not-applicable (retrieval off)" if retrieval_off else "applied",
         "ok": ok,
@@ -138,7 +145,8 @@ def main():
     print(json.dumps(result, indent=2))
     for kind in ("refs_without_definition", "definitions_never_referenced",
                  "duplicate_labels", "definitions_without_ledger_url",
-                 "definitions_with_multiple_urls", "duplicate_source_definitions"):
+                 "definitions_with_multiple_urls", "duplicate_source_definitions",
+                 "authored_appendix"):
         for detail in result[kind]:
             print(f"PROBLEM {kind}: {detail}")
     if not result["inline_labels"]:
