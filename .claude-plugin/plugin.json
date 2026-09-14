@@ -1,7 +1,7 @@
 {
   "name": "deeper-research",
   "description": "Grounded deep research: multi-angle retrieval, verbatim page archiving, claim-level verification by a decoy-calibrated verifier, adversarial review, and mechanical citation gates.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "Michele \"Ubik\" De Simoni",
     "email": "ubik@ubik.tech"
