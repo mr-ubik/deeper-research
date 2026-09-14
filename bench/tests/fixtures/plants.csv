@@ -1,0 +1,5 @@
+metric,item_id,expected_verdict
+M1,plant.m1,supported
+M2,plant.m2,found
+M3,plant.m3,covered
+M4,plant.m4,concordant
