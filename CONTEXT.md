@@ -45,12 +45,19 @@ workflow template.
   that makes the verifier trusted. An unmeasured verifier is untrusted.
 - **Unverified lead** — a claim carried in the ledger without full support
   (beyond the vote cap, split/failed votes, or quote not found); citable only
-  as `[S{i}*]`.
+  with the sentence itself hedged to say so.
+- **Control run** — a run with `retrievalOff`: no scope, search, fetch, or
+  verification; the author writes from model memory alone and no review
+  runs. Exists to measure the memory floor a benchmark compares against.
 - **Adjudication** — the revision pass over reviewer findings: apply a finding
   only if the evidence supports it (the ledger for report review, the
   brief/seeds for plan review); reviewers can overreach.
-- **Canonical report** — the run's one official report artifact (`report.md`),
-  ending with the mechanical verification appendix.
+- **Canonical report** — the run's one official report artifact (`report.md`):
+  the adjudicated final (or the unreviewed draft when review failed) plus the
+  mechanical verification appendix, assembled by script after the run.
+- **Plain report** — `report_plain.md`: the canonical report without the
+  Methodology section and the appendix, for blind comparison with reports
+  from other pipelines.
 
 ## Gates and checks
 
@@ -60,7 +67,10 @@ workflow template.
 - **Quote gate** — the post-run recheck that every vote's evidence quote
   actually appears in the archived page, and that decoy votes report the quote
   absent.
-- **Citation check** — the mechanical validation that every inline `S{i}` cite
-  and bibliography entry wires to the ledger, both directions, no orphans.
+- **Citation check** — the mechanical validation of the report's footnotes
+  against the ledger: every footnote reference has a definition and every
+  definition is referenced, every definition carries exactly one ledger URL
+  verbatim, and no source is defined twice. The URL is the join key; footnote
+  numbers carry no ledger identity.
 - **Methodology check** — the mechanical validation that the report includes
   the generated Methodology section verbatim.
