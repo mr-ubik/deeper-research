@@ -76,7 +76,7 @@ export const meta = {
   description: 'Deep-research run: scoped search angles, gap-driven two-round retrieval with quality-adaptive caps, verbatim page archiving, ranked atomic claim extraction, page-grounded verification with mandatory decoy calibration, and a draft/adversarial-review/adjudicate synthesis tail with mechanical citation checks',
   phases: [
     { title: 'Scope', detail: 'derive search angles from the question + brief + seed sources (skipped when angles are hardcoded)' },
-    { title: 'Search', detail: 'one search worker per angle (dr-search), then dedup, re-rank, and quality-adaptive cap' },
+    { title: 'Search', detail: 'one search worker per angle (dr-search) returning its full result set with snippets, then dedup, snippet triage (re-rank), and quality-adaptive cap' },
     { title: 'Fetch', detail: 'fetch each source, persist verbatim page text, extract ranked atomic claims + bibliographic metadata (dr-fetch)' },
     { title: 'Verify', detail: 'independent page-grounded votes per claim (dr-verify), with planted decoys measuring the verifier' },
     { title: 'Gap', detail: 'gap analysis of the round-1 ledger proposes targeted round-2 angles; retrieval repeats' },
@@ -168,9 +168,10 @@ const SEARCH_SCHEMA = {
         properties: {
           url: { type: 'string' },
           title: { type: 'string' },
+          snippet: { type: 'string' },
           relevance: { type: 'string' },
         },
-        required: ['url', 'title', 'relevance'],
+        required: ['url', 'title', 'snippet', 'relevance'],
       },
     },
   },
@@ -182,8 +183,9 @@ const RANK_SCHEMA = {
   properties: {
     ranking: { type: 'array', items: { type: 'integer' } },
     high_quality_count: { type: 'integer' },
+    near_duplicates: { type: 'array', items: { type: 'integer' } },
   },
-  required: ['ranking', 'high_quality_count'],
+  required: ['ranking', 'high_quality_count', 'near_duplicates'],
 }
 
 const SCOPE_SCHEMA = {
@@ -305,27 +307,35 @@ const seenUrls = new Set()
 const allFound = []
 
 // One round of search fan-out: one worker per angle, then dedup + blocklist +
-// re-rank + cap. Re-ranking before the cap matters: without it the fetch budget
-// goes to whatever was discovered first, an arbitrary selection at exactly the
-// point where recall is decided. The cap is quality-adaptive: the ranker
-// certifies how many candidates are genuinely high-quality and the fetch count
-// follows that certification within [fetchMin, fetchMax].
+// snippet triage (re-rank) + cap. The workers return EVERY result their
+// searches produced, with the engine's snippet: a search already paid for ten
+// results per query, and a snippet is enough to judge relevance, recency, and
+// modality without a fetch. Keeping only a worker's top 3 threw that breadth
+// away before anything could rank it. Re-ranking the whole pool before the
+// cap matters: without it the fetch budget goes to whatever was discovered
+// first, an arbitrary selection at exactly the point where recall is decided.
+// The cap is quality-adaptive: the ranker certifies how many candidates are
+// genuinely high-quality and the fetch count follows that certification
+// within [fetchMin, fetchMax]. Verification economics are untouched: only the
+// pool the cap chooses from grows.
 async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
   const batches = await parallel(angles.map((angle, i) => () =>
     agent(
       `Run 1-2 web searches on ONE angle of the research question "${QUESTION}".\n` +
       `Your angle: ${angle}\n\n` +
-      `Return the 3 most relevant sources you find. Prefer primary sources over secondhand coverage — ` +
-      `but "primary" depends on the angle: peer-reviewed/preprint papers for research findings, engineering ` +
-      `blogs or postmortems from the teams that built the systems for practice claims, benchmark ` +
-      `leaderboards/repos for evaluation claims, official docs or standards for specification claims. ` +
-      `Vary query phrasing to reach the source types your angle needs; do not return 3 hits of the same ` +
-      `modality when the angle spans several. Avoid news aggregators and SEO content farms. ` +
+      `Return EVERY result your searches produced (typically 10-20), not a selection: a later triage ` +
+      `stage ranks the whole pool, and a result you drop here is lost to the run. Phrase queries to ` +
+      `reach primary sources — but "primary" depends on the angle: peer-reviewed/preprint papers for ` +
+      `research findings, engineering blogs or postmortems from the teams that built the systems for ` +
+      `practice claims, benchmark leaderboards/repos for evaluation claims, official docs or standards ` +
+      `for specification claims. Vary query phrasing to reach the source types your angle needs. ` +
       (BLOCKLIST.length
         ? `Exclude any source whose URL contains "${BLOCKLIST.join('" or "')}", and any source that primarily ` +
           `summarizes or discusses content from those domains. `
         : '') +
-      `For each source give url, title, and a one-line relevance note. ` +
+      `For each result give url, title, snippet (the search engine's snippet text VERBATIM, "" if ` +
+      `none), and a one-line relevance note of your own (name the source modality and flag ` +
+      `aggregators or SEO content farms as such rather than omitting them). ` +
       `If searches fail, return an empty results array.`,
       { label: `search:${roundLabel}:${i}`, phase: 'Search', agentType: T_SEARCH, model: WORKER, effort: 'low', schema: SEARCH_SCHEMA }
     )
@@ -338,8 +348,9 @@ async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
       if (!r.url || BLOCKLIST.some(b => r.url.includes(b))) continue
       if (seenUrls.has(urlKey(r.url))) continue
       seenUrls.add(urlKey(r.url))
-      fresh.push(r)
-      allFound.push(r)
+      const cand = { url: r.url, title: r.title || '', snippet: r.snippet || '', relevance: r.relevance || '', round: roundLabel }
+      fresh.push(cand)
+      allFound.push(cand)
     }
   }
 
@@ -350,10 +361,12 @@ async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
   if (fresh.length > fetchMin) {
     const rankResult = await agent(
       `Rank candidate sources for the research question "${QUESTION}".\n\n` +
-      `Below are ${fresh.length} sources found by parallel searches on different angles of the ` +
-      `question. Between ${fetchMin} and ${Math.min(fetchMax, fresh.length)} of them will be ` +
-      `fetched and read — how many depends on YOUR quality call — so the ranking decides coverage.\n\n` +
-      fresh.map((s, i) => `[${i}] ${s.url}\n    title: ${s.title}\n    relevance: ${s.relevance}`).join('\n') +
+      `Below are ${fresh.length} candidate sources found by parallel searches on different angles of ` +
+      `the question, each with its search-engine snippet. Between ${fetchMin} and ` +
+      `${Math.min(fetchMax, fresh.length)} of them will be fetched and read — how many depends on ` +
+      `YOUR quality call — so the ranking decides coverage. Judge from the snippet and title: they ` +
+      `are enough to tell relevance, recency, and modality.\n\n` +
+      fresh.map((s, i) => `[${i}] ${s.url}\n    title: ${s.title}\n    snippet: ${(s.snippet || '').slice(0, 400)}\n    note: ${s.relevance}`).join('\n') +
       `\n\nRank ALL indices best-first by: (a) direct relevance to the research question, ` +
       `(b) primary literature over secondary commentary, (c) diversity — the fetched set together ` +
       `should cover as many distinct facets of the question as possible, so demote a source that ` +
@@ -362,23 +375,29 @@ async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
       `you certify as genuinely high-quality for this question — primary, authoritative, ` +
       `substantive. Be honest: do not pad the count to fill the budget, and do not lowball it if ` +
       `the pool really is strong; only certified sources above the floor get fetched. ` +
-      `Judge ONLY from the url/title/relevance text given; do not search or fetch anything. ` +
-      `Return every index exactly once in the ranking array.`,
+      `ALSO return near_duplicates: indices that are the same document or a re-hosting/summary of a ` +
+      `better-ranked candidate (mirrors, aggregator copies, the same paper under another URL); they ` +
+      `are excluded from the fetch budget. Judge ONLY from the url/title/snippet/note text given; do ` +
+      `not search or fetch anything. Return every index exactly once in the ranking array.`,
       { label: `rerank:${roundLabel}`, phase: 'Search', model: WORKER, effort: 'low', schema: RANK_SCHEMA }
     )
     // Sanitize the ranking defensively: keep the first occurrence of each valid
     // index, append anything the ranker omitted, and fall back to discovery
     // order (floor count) if ranking failed entirely. Drops are always logged —
     // a silent cap reads as "covered everything" when it didn't.
+    const dupes = new Set(((rankResult && rankResult.near_duplicates) || [])
+      .filter(i => Number.isInteger(i) && i >= 0 && i < fresh.length))
     const order = []
     const seenIdx = new Set()
     for (const i of ((rankResult && rankResult.ranking) || [])) {
-      if (Number.isInteger(i) && i >= 0 && i < fresh.length && !seenIdx.has(i)) {
+      if (Number.isInteger(i) && i >= 0 && i < fresh.length && !seenIdx.has(i) && !dupes.has(i)) {
         seenIdx.add(i)
         order.push(i)
       }
     }
-    for (let i = 0; i < fresh.length; i++) if (!seenIdx.has(i)) order.push(i)
+    for (let i = 0; i < fresh.length; i++) if (!seenIdx.has(i) && !dupes.has(i)) order.push(i)
+    // Near-duplicates never get fetched, but they stay in the pool record.
+    for (const i of dupes) order.push(i)
     reranked = !!(rankResult && rankResult.ranking && rankResult.ranking.length)
     highQuality = reranked && Number.isInteger(rankResult.high_quality_count)
       ? Math.max(0, rankResult.high_quality_count) : null
@@ -386,12 +405,12 @@ async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
       ? Math.min(fetchMax, Math.max(fetchMin, highQuality === null ? fetchMin : highQuality), fresh.length)
       : Math.min(fetchMin, fresh.length)
     picked = order.slice(0, take).map(i => fresh[i])
-    dropped = order.slice(take).map(i => fresh[i].url)
-    log(`Cap (${roundLabel}): fetching ${take} of ${fresh.length} new sources (${reranked ? `ranker certified ${highQuality} high-quality, bounds [${fetchMin}, ${fetchMax}]` : 'RERANK FAILED, floor count in discovery order'}); dropped: ${dropped.join(', ')}`)
+    dropped = order.slice(take).map(i => fresh[i])
+    log(`Triage (${roundLabel}): ${fresh.length} candidates from snippets, fetching ${take} (${reranked ? `ranker certified ${highQuality} high-quality, ${dupes.size} near-duplicates, bounds [${fetchMin}, ${fetchMax}]` : 'RERANK FAILED, floor count in discovery order'}); not fetched: ${dropped.map(d => d.url).join(', ')}`)
   } else {
     picked = fresh.slice(0, fetchMax)
-    dropped = fresh.slice(fetchMax).map(s => s.url)
-    log(`Fetching ${picked.length} of ${fresh.length} new sources (${roundLabel}, at or below the floor, no re-rank)${dropped.length ? `; dropped by fetchMax: ${dropped.join(', ')}` : ''}`)
+    dropped = fresh.slice(fetchMax)
+    log(`Fetching ${picked.length} of ${fresh.length} new sources (${roundLabel}, at or below the floor, no re-rank)${dropped.length ? `; dropped by fetchMax: ${dropped.map(d => d.url).join(', ')}` : ''}`)
   }
   return { picked: picked, found: fresh.length, reranked: reranked, dropped: dropped, high_quality: highQuality }
 }
@@ -621,7 +640,7 @@ if (RETRIEVAL_OFF) {
 // and citable like any other source (round tag 0). Their urls enter the dedup
 // set FIRST so searches re-surfacing them dedup away instead of double-fetching.
 const seedPicked = SEED_SOURCES.map(s => ({
-  url: s.url, title: s.title, relevance: 'user-provided seed source', localPath: s.localPath || '',
+  url: s.url, title: s.title, snippet: '', relevance: 'user-provided seed source', round: 'r0', localPath: s.localPath || '',
 }))
 for (const s of seedPicked) { seenUrls.add(urlKey(s.url)); allFound.push(s) }
 const EMPTY_ROUND = { picked: [], found: 0, reranked: false, dropped: [], high_quality: null }
@@ -656,7 +675,11 @@ function gapPrompt(roundResults, dropped) {
     `Research question:\n"${QUESTION}"\n\n` +
     `Round-1 search angles:\n${runAngles.map(a => '- ' + a).join('\n')}\n\n` +
     `Evidence so far (seed sources first, then round-1; verified claims and unverified leads per source):\n${summary}\n\n` +
-    (dropped.length ? `Sources found in round 1 but not fetched (cap): ${dropped.join(', ')}\n\n` : '') +
+    (dropped.length
+      ? `Candidates found in round 1 but not fetched (cap), with their search snippets — a gap that one ` +
+        `of these would fill is a reason to target it in round 2:\n` +
+        dropped.map(d => `- ${d.url} — ${d.title}${d.snippet ? ` — "${d.snippet.slice(0, 200)}"` : ''}`).join('\n') + '\n\n'
+      : '') +
     'Identify the most important GAPS: facets of the research question with no or thin evidence, ' +
     'pillars resting on a single source, claims that need independent corroboration, and missing ' +
     'source modalities (papers vs engineering practice vs benchmarks/evaluations vs official docs). ' +
@@ -789,8 +812,9 @@ const methodologyMd = [
       'its citations are unverified.'
     : `- **Retrieval, round 1**: ${runAngles.length} independent search angles ` +
       `(${ANGLES.length ? 'fixed for this run' : 'derived by a scoping pass from the question and seed material'}) ` +
-      `were queried in parallel; ${r1.found} unique sources were found after deduplication and ` +
-      `blocklisting and ranked for relevance, primary-source quality, and facet diversity` +
+      `were queried in parallel; ${r1.found} unique candidates were found after deduplication and ` +
+      `blocklisting and triaged from their search snippets for relevance, primary-source quality, ` +
+      `and facet diversity` +
       (r1.high_quality === null
         ? `; ${r1.picked.length} were fetched in full.`
         : `; the ranker certified ${r1.high_quality} candidates as high-quality and ` +
@@ -800,7 +824,7 @@ const methodologyMd = [
     ? `- **Retrieval, round 2 (gap-driven)**: an analysis of the evidence so far identified ` +
       `${((gapAnalysis && gapAnalysis.gaps) || []).length} coverage gaps and generated ` +
       `${gapAngles.length} targeted follow-up angle${gapAngles.length === 1 ? '' : 's'}; ` +
-      `${r2.found} further unique sources were found and ${r2.picked.length} were fetched` +
+      `${r2.found} further unique candidates were found and triaged and ${r2.picked.length} were fetched` +
       (r2.high_quality === null ? '.' : ` (${r2.high_quality} certified high-quality, bounds ${FETCH_MIN_R2}–${FETCH_MAX_R2}).`)
     : '- **Retrieval, round 2**: not run (no gap-driven angles were generated for this run).',
   RETRIEVAL_OFF ? null :
@@ -1177,11 +1201,14 @@ return {
   },
   rounds: {
     r0: { seeds: seedPicked.map(s => s.url) },
-    r1: { angles: RETRIEVAL_OFF ? [] : runAngles, angles_source: RETRIEVAL_OFF ? 'skipped' : ANGLES.length ? 'hardcoded' : 'scope-generated', unique_found: r1.found, high_quality: r1.high_quality, fetched: r1.picked.map(s => s.url), reranked: r1.reranked },
-    r2: { angles: gapAngles, unique_found: r2.found, high_quality: r2.high_quality, fetched: r2.picked.map(s => s.url), reranked: r2.reranked },
+    r1: { angles: RETRIEVAL_OFF ? [] : runAngles, angles_source: RETRIEVAL_OFF ? 'skipped' : ANGLES.length ? 'hardcoded' : 'scope-generated', unique_found: r1.found, high_quality: r1.high_quality, fetched: r1.picked.map(s => s.url), not_fetched: r1.dropped.map(s => s.url), reranked: r1.reranked },
+    r2: { angles: gapAngles, unique_found: r2.found, high_quality: r2.high_quality, fetched: r2.picked.map(s => s.url), not_fetched: r2.dropped.map(s => s.url), reranked: r2.reranked },
   },
   gap_analysis: gapAnalysis,
   search_unique_sources: allFound.map(s => s.url),
+  // The triage pool: every unique candidate a search produced, with its
+  // snippet. "Sources" in the ledger are only the fetched, archived subset.
+  search_pool: allFound.map(s => ({ url: s.url, title: s.title || '', snippet: s.snippet || '', relevance: s.relevance || '', round: s.round || '' })),
   fetched: seedPicked.concat(r1.picked, r2.picked).map(s => s.url),
   results: flat,
   tally: tally,
