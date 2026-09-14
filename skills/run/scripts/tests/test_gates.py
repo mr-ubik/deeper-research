@@ -188,3 +188,61 @@ class AssembleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class ReviewFollowupTests(unittest.TestCase):
+    """Cases added after the adjudicated review of the v0.3 instrument."""
+
+    def run_module(self, module, name, root):
+        old = sys.argv
+        sys.argv = [name, str(root)]
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                code = module.main()
+        finally:
+            sys.argv = old
+        return code, out.getvalue()
+
+    def make_run(self, root, results, files):
+        (root / "results.json").write_text(json.dumps(results))
+        for name, text in files.items():
+            (root / name).write_text(text)
+
+    def test_assemble_honors_recorded_report_source(self):
+        big = "# Report\n\n" + ("x" * 300) + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # A stale final from an earlier attempt must lose to the recorded draft.
+            self.make_run(root, {"appendix": "", "report_source": "draft"},
+                          {"final_report.md": big.replace("Report", "STALE"),
+                           "unreviewed_report.md": big})
+            code, out = self.run_module(assemble, "assemble-report.py", root)
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(out.splitlines()[0])["report_source"], "draft")
+            self.assertNotIn("STALE", (root / "report.md").read_text())
+
+    def test_assemble_none_means_no_report(self):
+        big = "# Report\n\n" + ("x" * 300) + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.make_run(root, {"appendix": "", "report_source": "none"},
+                          {"unreviewed_report.md": big})
+            code, out = self.run_module(assemble, "assemble-report.py", root)
+            self.assertEqual(code, 1)
+            self.assertIn("NO-REPORT", out)
+
+    def test_check_report_retrieval_off_skips_ledger_url_checks(self):
+        report = ("# R\n\nA fact.[^1]\n\n[^1]: Someone (2020). A memory source. "
+                  "https://memory.example/x\n\nM\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.make_run(root, {"retrieval_off": True, "results": [],
+                                 "methodology": "M"}, {"report.md": report})
+            code, out = self.run_module(reports, "check-report.py", root)
+            data = json.JSONDecoder().raw_decode(out)[0]
+            self.assertEqual(code, 0)
+            self.assertTrue(data["ok"])
+            self.assertEqual(data["ledger_checks"], "not-applicable (retrieval off)")
+            self.assertEqual(data["definitions_without_ledger_url"], [])

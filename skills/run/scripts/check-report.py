@@ -78,13 +78,22 @@ def inspect_report(report, data):
         matches[label] = [url for url in found
                           if not any(url != other and other.startswith(url)
                                      for other in found)]
-    definitions_without_ledger_url = [x for x in definition_order
-                                      if not matches[x]]
-    definitions_with_multiple_urls = [x for x in definition_order
-                                      if len(matches[x]) > 1]
-    duplicate_source_definitions = ordered_unique(
-        url for url in urls
-        if sum(url in matches[label] for label in definition_order) > 1)
+    # A retrieval-off control run has no ledger: its footnotes come from the
+    # authoring model's memory, so only the reference/definition wiring can be
+    # checked. The URL checks are recorded as not applicable, never as clean.
+    retrieval_off = data.get("retrieval_off") is True
+    if retrieval_off:
+        definitions_without_ledger_url = []
+        definitions_with_multiple_urls = []
+        duplicate_source_definitions = []
+    else:
+        definitions_without_ledger_url = [x for x in definition_order
+                                          if not matches[x]]
+        definitions_with_multiple_urls = [x for x in definition_order
+                                          if len(matches[x]) > 1]
+        duplicate_source_definitions = ordered_unique(
+            url for url in urls
+            if sum(url in matches[label] for label in definition_order) > 1)
 
     cited_urls = {url for label in inline_labels for url in matches.get(label, [])}
     sources_cited = [s.get("key") for s in sources
@@ -109,6 +118,7 @@ def inspect_report(report, data):
         "sources_cited": sources_cited,
         "fetch_failed_cited": failed,
         "methodology_ok": methodology_ok,
+        "ledger_checks": "not-applicable (retrieval off)" if retrieval_off else "applied",
         "ok": ok,
     }
 
