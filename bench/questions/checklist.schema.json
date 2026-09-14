@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/deeper-research/checklist.schema.json",
+  "title": "Research benchmark checklist",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["question_id", "question", "register", "source", "claims", "conclusions", "references", "authoritative_sources"],
+  "properties": {
+    "question_id": {"type": "string"},
+    "question": {"type": "string"},
+    "register": {"enum": ["decision-memo", "survey", "article"]},
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "title", "url", "content_cutoff"],
+      "properties": {
+        "type": {"enum": ["survey", "rubric"]}, "title": {"type": "string"},
+        "url": {"type": "string"}, "content_cutoff": {"type": "string", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$"}
+      }
+    },
+    "claims": {"type": "array", "items": {"type": "object", "additionalProperties": false,
+      "required": ["id", "text", "kind", "acceptance", "survey_ref"],
+      "properties": {"id": {"type": "string"}, "text": {"type": "string"},
+        "kind": {"enum": ["must-have", "trap", "hedge-required"]}, "acceptance": {"type": "string"},
+        "survey_ref": {"type": ["string", "null"]}}}},
+    "conclusions": {"type": "array", "items": {"type": "object", "additionalProperties": false,
+      "required": ["id", "text"], "properties": {"id": {"type": "string"}, "text": {"type": "string"}}}},
+    "references": {"type": "array", "items": {"type": "object", "additionalProperties": false,
+      "required": ["id", "title", "url", "class", "access"],
+      "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "url": {"type": "string"},
+        "class": {"enum": ["load-bearing", "background"]}, "access": {"enum": ["open", "closed"]}}}},
+    "authoritative_sources": {"type": "array", "items": {"type": "string"}}
+  }
+}
