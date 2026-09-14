@@ -1,0 +1,22 @@
+{
+  "results": [
+    {
+      "page_file": "pages/s0.txt",
+      "fetch_ok": true,
+      "claims": [
+        {"quote": "Alpha evidence has enough words here", "votes": [{"quote_found": true}, {"quote_found": true}]},
+        {"quote": "Beta evidence also has enough words", "votes": [{"quote_found": true}, {"quote_found": true}]}
+      ],
+      "calibration": {"quote": "Fabricated absent decoy quotation", "votes": [{"quote_found": false}]}
+    },
+    {
+      "page_file": "pages/s1.txt",
+      "fetch_ok": true,
+      "claims": [
+        {"quote": "Alpha evidence has enough words here", "votes": [{"quote_found": true}, {"quote_found": true}]},
+        {"quote": "Beta evidence also has enough words", "votes": [{"quote_found": true}, {"quote_found": true}]}
+      ],
+      "calibration": {"quote": "Fabricated absent decoy quotation", "votes": [{"quote_found": false}]}
+    }
+  ]
+}
