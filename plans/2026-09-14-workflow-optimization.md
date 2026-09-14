@@ -28,9 +28,13 @@ Progress (2026-09-14, end of first session):
   run = 99 agents, ~8.2M Sonnet-eq tokens, 6.4 min; output is JSON, not
   Markdown, so the builtin arm needs `bench/render-builtin.py` (deterministic
   JSON→Markdown with footnotes) before blind judging.
-- NOT done: `bench/render-builtin.py`; the judge
-  harness (M1 sampling, source fetch for both arms, plant injection,
-  template filling, CSV collection); `bench/PROTOCOL.md`; question
+- Bench branch `bench/harness` (after the pilot): `render_builtin.py`
+  (deterministic JSON→Markdown with footnotes, validated on the pilot
+  output), `PROTOCOL.md`, and the judge harness (`sample_m1`,
+  `fetch_sources`, `make_batches`, `collect`, `judge_run`; written by
+  gpt-6-astra via pi, reviewed, dry-run on run 20260914144206).
+- NOT done: a live judge calibration pass (one real judge_run on a test
+  report to measure plant detection before any baseline); question
   checklists q1–q4 (human). benchmark-plan.md: disregarded per the human.
 Supersedes the F1–F6 list in the earlier handoff where the two differ.
 Register: STE. Vocabulary per `CONTEXT.md`.
