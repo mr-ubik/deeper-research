@@ -1,0 +1,5 @@
+This introductory overview describes a fictional urban transport system and establishes the background for a detailed evaluation of its changing vehicle fleet.
+Electric buses eliminate local tailpipe emissions while carrying passengers along established routes throughout the city every weekday.
+Depot charging infrastructure requires sufficient electrical capacity and careful coordination with local utilities before new vehicles enter passenger service.
+Operators should budget for staff training and maintenance equipment as well as the vehicles themselves when preparing procurement plans.
+This final overview summarizes the evaluation process and reminds readers that the fictional example does not represent actual procurement advice for any particular city.
