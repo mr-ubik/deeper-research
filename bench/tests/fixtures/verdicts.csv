@@ -1,0 +1,17 @@
+run_id,question_id,metric,item_id,verdict,judge,evidence_note
+run-0,q0,M1,s.001,supported,gpt,good
+run-0,q0,M1,s.002,partial,gpt,mixed
+run-0,q0,M1,plant.m1,supported,gpt,plant
+run-0,q0,M2,q0.r01,found,gpt,found
+run-0,q0,M2,q0.r02,missed_closed,gpt,closed
+run-0,q0,M2,surplus.1,surplus_contemporaneous,gpt,extra
+run-0,q0,M2,plant.m2,found,gpt,plant
+run-0,q0,M3,q0.c001,covered,gpt,covered
+run-0,q0,M3,q0.c002,trap_avoided,gpt,avoided
+run-0,q0,M3,q0.c003,hedge_violated,gpt,not hedged
+run-0,q0,M3,plant.m3,covered,gpt,plant
+run-0,q0,M4,q0.k01,concordant,gpt,agrees
+run-0,q0,M4,q0.k02,omitted,gpt,missing
+run-0,q0,M4,plant.m4,concordant,gpt,plant
+foreign,q0,M1,s.999,unsupported,gpt,foreign
+run-0,q0,M1,s.001,unsupported,human,override

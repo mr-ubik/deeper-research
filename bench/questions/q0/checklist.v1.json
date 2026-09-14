@@ -1,0 +1,21 @@
+{
+  "question_id": "q0",
+  "question": "Should a fictional city adopt electric buses?",
+  "register": "decision-memo",
+  "source": {"type": "rubric", "title": "Synthetic transport rubric", "url": "https://example.invalid/q0", "content_cutoff": "2025-01"},
+  "claims": [
+    {"id": "q0.c001", "text": "Electric buses reduce local tailpipe emissions.", "kind": "must-have", "acceptance": "The report states that electric buses have no local tailpipe emissions.", "survey_ref": "section 1"},
+    {"id": "q0.c002", "text": "Every route can use an electric bus without operational changes.", "kind": "trap", "acceptance": "The report does not claim universal route suitability.", "survey_ref": null},
+    {"id": "q0.c003", "text": "Lifetime cost depends on local operating conditions.", "kind": "hedge-required", "acceptance": "The report qualifies cost conclusions with local conditions.", "survey_ref": "section 2"}
+  ],
+  "conclusions": [
+    {"id": "q0.k01", "text": "Run a route-specific pilot before fleet replacement."},
+    {"id": "q0.k02", "text": "Include charging infrastructure in the procurement plan."}
+  ],
+  "references": [
+    {"id": "q0.r01", "title": "Electric Bus Operations", "url": "https://example.invalid/r1", "class": "load-bearing", "access": "open"},
+    {"id": "q0.r02", "title": "Transit Cost Survey", "url": "https://example.invalid/r2", "class": "load-bearing", "access": "closed"},
+    {"id": "q0.r03", "title": "City Bus History", "url": "https://example.invalid/r3", "class": "background", "access": "open"}
+  ],
+  "authoritative_sources": ["National Transit Laboratory", "City Transport Agency"]
+}
