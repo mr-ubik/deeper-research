@@ -53,3 +53,35 @@ Run the unit tests from the repository root:
 ```sh
 python3 -m unittest discover bench/tests
 ```
+
+## Judge harness
+
+The sampler selects cited sentences from a blinded report in reproducible document order.
+
+```sh
+python3 bench/sample_m1.py blinded.md --n 15 --seed 1 --out items.json
+```
+
+The source cache reuses deeper archives when available and fetches remaining URLs once.
+
+```sh
+python3 bench/fetch_sources.py --items items.json --run-dir RUN_DIR --out sources/
+```
+
+The batch builder fills attribution and checklist prompts with shuffled calibration plants.
+
+```sh
+python3 bench/make_batches.py --items items.json --sources sources/ --report blinded.md --checklist checklist.v1.json --run-id R --question-id Q --out batches/
+```
+
+The collector combines completed judge outputs after each batch has been judged with `judge.py`.
+
+```sh
+python3 bench/collect.py --manifest batches/manifest.json --outputs judge-outputs/ --out verdicts.csv
+```
+
+The orchestrator performs the complete sequence, preserves completed batches, records failures without retrying, and prints the scoring command.
+
+```sh
+python3 bench/judge_run.py --report blinded.md --checklist checklist.v1.json --run-id R --question-id Q --out judge-run/ --run-dir RUN_DIR
+```
