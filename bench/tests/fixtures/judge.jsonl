@@ -1,0 +1,3 @@
+{"type":"message_end","message":{"usage":{"input":11,"output":3,"totalTokens":14}}}
+{"type":"other","usage":{"input":7,"output":2,"totalTokens":9}}
+bad line
