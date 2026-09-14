@@ -32,10 +32,12 @@ key — an array of reviewer objects with the same shapes as `reviewer`:
 ```
 
 That single fresh-context reviewer is the default when the key is absent —
-never nag an existing config for it. Users with a working Codex CLI can append
-a `codex-cli` entry (same `{type, label, command}` shape and same permission
-prefix-rule caveats as run's external reviewer); different model families have
-different blind spots, so a two-reviewer panel is the high-trust setup.
+never nag an existing config for it. Users with a working command-line agent
+for a second model family can append a `cli` entry (same
+`{type, label, command, wrapperModel}` shape, `{prompt}` placeholder, and
+permission prefix-rule caveats as run's external reviewer; the legacy
+`codex-cli` spelling still works); different model families have different
+blind spots, so a two-reviewer panel is the high-trust setup.
 
 Done when: config is loaded and the reviewer panel is known.
 
@@ -99,15 +101,22 @@ explicitly" — an invented finding is worse than none.
 
 - `claude` reviewers: a fresh-context subagent (Agent tool; `inherit` = omit
   the model override). They may WebFetch URL seeds directly.
-- `codex-cli` reviewers: write the prompt (with inline file paths) to a
-  uniquely named file in the run folder yourself, then spawn a relay subagent
-  on the entry's `wrapperModel` (default `opus` — the external model does the
-  reviewing, so the relay never runs on the session model), name prefixed
-  `[codex]`. Its ONLY job: run `<command> "$(cat <file>)"` as ONE Bash call —
-  a single line, no compounds, no heredocs (the allowlist matches the prefix)
-  — and return stdout verbatim; never retry, and on error or empty output
-  return an explicit error string instead of a review. The CLI's read-only
-  sandbox has no network, which is why step 3 snapshots URL seeds to disk.
+- `cli` reviewers (and legacy `codex-cli`): write the prompt (with inline
+  file paths) to a uniquely named file in the run folder yourself, then spawn
+  a relay subagent on the entry's `wrapperModel` (default: the worker model —
+  the external model does the reviewing, so the relay never runs on the
+  session model), name prefixed `[codex]` when the command is `codex`, else
+  `[cli]`. Its ONLY job: run the entry's `command` with `{prompt}` replaced
+  by the prompt file's path (for `codex-cli` append ` - < <file>`), with
+  ` > <run folder>/plan-review-<label>.md 2>/dev/null` appended, as ONE Bash
+  call — a single line, no compounds, no heredocs, never `"$(cat <file>)"`
+  (large prompts exceed the per-argument limit and die with exit 127; the
+  allowlist matches the prefix) — then Read that output file and return its
+  contents; never retry, and on error or empty output return an explicit
+  error string instead of a review. A CLI run with `--no-tools` or in a
+  read-only sandbox has no network, which is why step 3 snapshots URL seeds
+  to disk; a `--no-tools` reviewer cannot read the snapshots either, so
+  inline the seed text into the prompt file for such entries.
 
 Done when: every reviewer has returned findings (or an explicit nothing-found).
 
