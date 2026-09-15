@@ -67,5 +67,10 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("invalid for claim kind 'trap'", result.stderr)
 
+    def test_refuses_empty_verdict_set(self):
+        # Zero rows must never score as "zero everywhere, exit 0".
+        result = self.run_score(self.write_rows([]))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("REFUSED: no verdict rows", result.stderr)
 
 if __name__ == "__main__": unittest.main()
