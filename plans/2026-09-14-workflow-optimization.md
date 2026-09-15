@@ -40,8 +40,14 @@ Progress (2026-09-14, end of first session):
   --from-events recovery), score.py scored an empty verdict set as zero
   with exit 0 (now refuses), collect.py dropped rows with a one-quote-short
   note (now repairs an odd quote count).
-- NOT done: question checklists q1–q4 (human). benchmark-plan.md:
-  disregarded per the human.
+- cli verifier built on `feat/verify-via-pi` (PR #7, 2026-09-15): votes
+  through gpt-5.6-luna via pi with the page attached; on run 1's question
+  and decoys, strict decoy detection 9/10 vs Haiku's 4/10, all gates
+  CLEAN, Claude-side cost 2.17M vs 3.01M Sonnet-eq. Instrument change:
+  land after the baseline as v0.4, or before it with a v0.3 re-hash —
+  human's call. Search stays on Sonnet by decision.
+- NOT done: question checklists q1–q4 (human); PR #6 and #7 review.
+  benchmark-plan.md: disregarded per the human.
 Supersedes the F1–F6 list in the earlier handoff where the two differ.
 Register: STE. Vocabulary per `CONTEXT.md`.
 
