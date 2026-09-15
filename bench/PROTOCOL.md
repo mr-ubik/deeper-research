@@ -7,7 +7,7 @@ rule is not a baseline run. Vocabulary: `CONTEXT.md` in the repo root.
 
 | arm | instrument | launch |
 | --- | --- | --- |
-| `deeper` | deeper-research at the tag `v0.3.0`; the instrument set hash in `INSTRUMENT.sha256` | the `run` skill, or the Workflow tool on a frozen template copy |
+| `deeper` | deeper-research at the tag `v0.3.1`; the instrument set hash in `INSTRUMENT.sha256` | the `run` skill, or the Workflow tool on a frozen template copy |
 | `builtin` | Claude Code's bundled `deep-research` workflow, extracted and routed; both hashes in the run folder | the Workflow tool on the routed copy, `args` = the question string |
 | `floor` | the memory floor for each arm (section 5) | see section 5 |
 
@@ -20,8 +20,10 @@ Every run records the exact model id of every role in its `notes.md`.
 Aliases (`sonnet`, `haiku`) are not enough; copy the ids from the transcript.
 
 - `deeper`: session model for scope, gap analysis, author, adjudicate;
-  worker `sonnet`; verifier `haiku`; reviewer as configured (record the
-  full `cli` command when one is used).
+  worker `sonnet`; verifier `gpt-5.6-luna` through pi (`args.verifier`,
+  type `cli`, page attached; adopted 2026-09-15 after 9/10 vs 4/10 strict
+  decoy detection against Haiku on the same decoys); reviewer as configured.
+  Record the full `cli` command for both.
 - `builtin`: session model for scope and synthesize; `sonnet` for search,
   fetch, verify. Enforced by the three `model: "sonnet"` edits in the
   routed script, never by a prompt sentence.

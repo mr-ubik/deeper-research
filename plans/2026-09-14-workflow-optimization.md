@@ -45,7 +45,9 @@ Progress (2026-09-14, end of first session):
   and decoys, strict decoy detection 9/10 vs Haiku's 4/10, all gates
   CLEAN, Claude-side cost 2.17M vs 3.01M Sonnet-eq. Instrument change:
   land after the baseline as v0.4, or before it with a v0.3 re-hash —
-  human's call. Search stays on Sonnet by decision.
+  ADOPTED before the baseline (human, 2026-09-15): PR #7 merged, re-frozen
+  as v0.3.1 (template d6085e38…, the exact copy the luna test run used).
+  Search stays on Sonnet by decision.
 - NOT done: question checklists q1–q4 (human); PR #6 and #7 review.
   benchmark-plan.md: disregarded per the human.
 Supersedes the F1–F6 list in the earlier handoff where the two differ.
