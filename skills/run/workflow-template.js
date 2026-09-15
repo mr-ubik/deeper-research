@@ -47,7 +47,17 @@
 //                   runs every agent without an explicit model (scope, gap,
 //                   author, review, adjudicate). Recorded, never used ('' ok)
 //     workerModel:  model for search/fetch workers (default 'sonnet')
-//     verifierModel: model casting verification votes (default 'haiku')
+//     verifierModel: model casting verification votes (default 'haiku'); shorthand
+//                   for verifier: { type: 'claude', model }
+//     verifier:     { type: 'claude', model } | { type: 'cli', command, label, wrapperModel }
+//                   A 'cli' verifier casts votes through a command-line model, like
+//                   the reviewer: command is ONE line with the placeholders {prompt}
+//                   (the staged vote prompt file) and {page} (the archived page
+//                   file, attached by the tool itself so the relay never reads it),
+//                   e.g. 'pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking low --model openai-codex/gpt-5.6-luna @{prompt} @{page}'
+//                   wrapperModel = the relay agent (default 'sonnet'). Decoy
+//                   calibration measures a cli verifier exactly as it measures a
+//                   Claude one.
 //     reviewer:     { type: 'claude', model: 'inherit'|<model>, label }
 //                   | { type: 'cli', command, label, wrapperModel }
 //                       command: ONE line containing the placeholder {prompt},
@@ -127,7 +137,20 @@ if (!RETRIEVAL_OFF && !(Number.isInteger(VOTES_PER_CLAIM) && VOTES_PER_CLAIM >= 
 }
 const SESSION_MODEL = A.sessionModel || ''
 const WORKER = A.workerModel || 'sonnet'
-const VERIFIER = A.verifierModel || 'haiku'
+// Verifier normalization (mirrors the reviewer): the string shorthand
+// verifierModel means a Claude agent; a 'cli' object routes votes through a
+// command-line model. VERIFIER stays the label used in logs and Methodology.
+const VERIFIER_CFG = A.verifier && A.verifier.type === 'cli'
+  ? A.verifier
+  : { type: 'claude', model: (A.verifier && A.verifier.model) || A.verifierModel || 'haiku' }
+if (VERIFIER_CFG.type === 'cli') {
+  if (typeof VERIFIER_CFG.command !== 'string' || !VERIFIER_CFG.command.includes('{prompt}')) {
+    throw new Error('args.verifier.command must be a single line containing the {prompt} placeholder (and {page} to attach the archived page)')
+  }
+  if (/[\r\n]/.test(VERIFIER_CFG.command)) throw new Error('args.verifier.command must be a single line')
+}
+const VERIFIER = VERIFIER_CFG.type === 'cli' ? `cli:${VERIFIER_CFG.label || 'external'}` : VERIFIER_CFG.model
+const VOTE_RELAY_MODEL = VERIFIER_CFG.wrapperModel || 'sonnet'
 // Reviewer normalization: 'codex-cli' is the legacy spelling of a 'cli'
 // reviewer whose prompt goes to stdin. After this block REVIEWER.type is
 // 'claude' or 'cli', and a 'cli' command always carries the {prompt} placeholder.
@@ -427,13 +450,16 @@ async function searchRound(angles, roundLabel, fetchMin, fetchMax) {
 // fabricated quote tends to do entailment on the fabrication ("does the quote
 // imply the claim?") instead of fact-checking against the source — grounding
 // closes exactly that hole, and the planted decoys measure that it stays closed.
-function votePrompt(batch, src, vi, pageFile) {
+function votePrompt(batch, src, vi, pageFile, attached) {
   const claimBlocks = batch.map((c, ci) =>
     `[claim_index=${ci}]\nCLAIM: ${c.claim}\nEVIDENCE (quote attributed to ${src.url}): ${c.quote}`
   ).join('\n\n')
   const pageBlock = pageFile
-    ? `The full text of the source page is persisted at ${pageFile} — read it with the Read tool ` +
-      `(use the Grep tool on that file for the quote checks) BEFORE judging any claim.\n` +
+    ? (attached
+        ? `The full text of the source page is ATTACHED to this prompt as the file ${pageFile}. Read ` +
+          `it in full BEFORE judging any claim; for the quote checks search that attached text.\n`
+        : `The full text of the source page is persisted at ${pageFile} — read it with the Read tool ` +
+          `(use the Grep tool on that file for the quote checks) BEFORE judging any claim.\n`) +
       `For each claim do BOTH checks and ground your verdict in them:\n` +
       `1. QUOTE CHECK (mechanical): search the page file for the claim's EVIDENCE quote (allow ` +
       `whitespace/markup differences). Report the result as quote_found. A quote absent from the ` +
@@ -447,10 +473,49 @@ function votePrompt(batch, src, vi, pageFile) {
     `not refute claims merely for being surprising. Judge each claim INDEPENDENTLY.\n\n` +
     pageBlock + '\n\n' +
     `CLAIMS TO VERIFY (${batch.length}):\n\n${claimBlocks}\n\n` +
-    `Return in your structured output one vote per claim: claim_index as given above, ` +
-    `vote_index=${vi} for every vote, verdict ("supported" | "refuted" | "unverifiable"), ` +
-    `confidence (0..1), reasoning (one sentence), quote_found (true | false). ` +
+    (attached
+      ? `Output ONLY a JSON object, no prose and no code fence: {"votes": [...]} with one vote per ` +
+        `claim: {"claim_index": <as given above>, "vote_index": ${vi}, "verdict": "supported" | ` +
+        `"refuted" | "unverifiable", "confidence": <0..1>, "reasoning": "<one sentence>", ` +
+        `"quote_found": true | false}. `
+      : `Return in your structured output one vote per claim: claim_index as given above, ` +
+        `vote_index=${vi} for every vote, verdict ("supported" | "refuted" | "unverifiable"), ` +
+        `confidence (0..1), reasoning (one sentence), quote_found (true | false). `) +
     `Every claim_index from 0 to ${batch.length - 1} must appear exactly once.`
+  )
+}
+
+// A 'cli' verifier: a cheap relay stages the vote prompt, runs ONE single-line
+// command that attaches the prompt and the archived page by path (the relay
+// never reads the page), and returns the JSON the external model wrote. Same
+// invariants as the reviewer relay: prefix-matched allow rule, one Bash call,
+// stdout redirected to a file, never retried. Malformed output becomes
+// verdict "error" votes, which the tally already counts and never trusts.
+function cliVotePrompt(batch, src, si, vi, pageFile) {
+  const promptPath = `${RUN_DIR}/vote-prompt-${RUN_TAG}-s${si}-v${vi}.txt`
+  const outPath = `${RUN_DIR}/votes-${RUN_TAG}-s${si}-v${vi}.json`
+  let command = VERIFIER_CFG.command.split('{prompt}').join(`'${promptPath}'`)
+  command = pageFile
+    ? command.split('{page}').join(`'${pageFile}'`)
+    : command.replace(/\S*\{page\}\S*/g, '')
+  command = command.replace(/\s+/g, ' ').trim() + ` > '${outPath}' 2>/dev/null`
+  return (
+    'You are a relay: obtain verification votes from an external model via a command-line tool. ' +
+    'Do NOT judge the claims yourself. Do NOT run git commands.\n\n' +
+    `(a) Write the text between the VOTE-PROMPT BEGIN/END markers below (markers excluded) to ` +
+    `${promptPath} with the Write tool (overwrite any existing content).\n` +
+    `(b) Run this as ONE Bash tool call with timeout 600000 ms:\n${command}\n` +
+    'CRITICAL: the command must stay a SINGLE LINE exactly as given — no cd, echo, variables, ' +
+    'heredocs, no combining with && or ; or |, no "$(cat ...)". NEVER retry it, even on error or ' +
+    'empty output.\n' +
+    `(c) Read ${outPath} with the Read tool. It should hold a JSON object {"votes": [...]} ` +
+    '(possibly wrapped in a code fence — ignore the fence). Return its votes in your structured ' +
+    'output EXACTLY as written: claim_index, vote_index, verdict, confidence, reasoning, ' +
+    'quote_found for each. Do not add, drop, or reword votes. If the file is empty, is not JSON, ' +
+    `or lacks a votes array, return instead one vote per claim_index from 0 to ${batch.length - 1} ` +
+    `with vote_index=${vi}, verdict "error", confidence 0, quote_found false, and reasoning ` +
+    '"relay: " plus what happened.\n\n' +
+    '--- VOTE-PROMPT BEGIN ---\n' + votePrompt(batch, src, vi, pageFile, true) + '\n--- VOTE-PROMPT END ---'
   )
 }
 
@@ -459,14 +524,22 @@ function votePrompt(batch, src, vi, pageFile) {
 // repeating itself.
 function runVotes(batch, src, si, pageFile) {
   return parallel(Array.from({ length: VOTES_PER_CLAIM }, (_, vi) => () =>
-    agent(votePrompt(batch, src, vi, pageFile), {
-      label: `votes s${si} v${vi} (${batch.length})`,
-      phase: 'Verify',
-      agentType: T_VERIFY,
-      model: VERIFIER,
-      effort: 'low',
-      schema: BATCH_VOTES_SCHEMA,
-    })
+    VERIFIER_CFG.type === 'cli'
+      ? agent(cliVotePrompt(batch, src, si, vi, pageFile), {
+          label: `[cli] votes s${si} v${vi} (${batch.length})`,
+          phase: 'Verify',
+          model: VOTE_RELAY_MODEL,
+          effort: 'low',
+          schema: BATCH_VOTES_SCHEMA,
+        })
+      : agent(votePrompt(batch, src, vi, pageFile, false), {
+          label: `votes s${si} v${vi} (${batch.length})`,
+          phase: 'Verify',
+          agentType: T_VERIFY,
+          model: VERIFIER_CFG.model,
+          effort: 'low',
+          schema: BATCH_VOTES_SCHEMA,
+        })
   )).then(parts => {
     const votes = []
     for (const p of parts.filter(Boolean)) for (const v of (p.votes || [])) votes.push(v)
@@ -1200,6 +1273,8 @@ return {
     session: SESSION_MODEL,
     worker: WORKER,
     verifier: VERIFIER,
+    verifier_command: VERIFIER_CFG.type === 'cli' ? VERIFIER_CFG.command : '',
+    vote_relay: VERIFIER_CFG.type === 'cli' ? VOTE_RELAY_MODEL : '',
     reviewer: REVIEWER.type === 'cli' ? `cli:${REVIEWER_LABEL}` : `claude:${REVIEWER.model || 'inherit'}`,
     reviewer_command: REVIEWER.type === 'cli' ? REVIEWER.command : '',
     relay: REVIEWER.type === 'cli' ? RELAY_MODEL : '',
