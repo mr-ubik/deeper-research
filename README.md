@@ -33,7 +33,9 @@ From a Claude Code session:
 Then **start a fresh session** (the run's worker agents register at session
 start) and you're ready. Requires Claude Code v2.1.154+ with dynamic workflows
 available on your plan, the WebSearch tool, and `python3` for the post-run
-quote gate.
+gates. Optional: the `pi` coding agent with a Codex subscription, which lets a
+second model family cast the verification votes and review the draft (see
+Configure).
 
 What those commands do: a Claude Code *marketplace* is just a catalog file a
 repo can host, and this repo is its own single-plugin marketplace — the first
@@ -123,35 +125,47 @@ run and hand-editable after:
 {
   "runsDir": "research",
   "workerModel": "sonnet",
-  "verifierModel": "haiku",
+  "verifier": {
+    "type": "cli",
+    "label": "gpt-5.6-luna",
+    "command": "pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking low --model openai-codex/gpt-5.6-luna @{prompt} @{page}",
+    "wrapperModel": "sonnet"
+  },
   "reviewer": { "type": "claude", "model": "inherit" },
   "depth": "standard",
   "blocklist": []
 }
 ```
 
+Without `pi`, replace the `verifier` object with `"verifierModel": "haiku"` and
+everything runs on Claude models alone.
+
 - **depth** — `quick` (4 angles, single round) / `standard` (6 angles, two
   rounds) / `deep` (9 angles, two rounds, 3 votes per claim). A `caps` object
   overrides any preset field.
-- **verifierModel** — the model casting verification votes. A small model works
-  well here *because* votes are page-grounded and decoy-calibrated: every run
+- **verifier** — who casts the verification votes. A small model works well
+  here *because* votes are page-grounded and decoy-calibrated: every run
   reports how often the verifier caught planted-false claims, so you see its
-  reliability instead of assuming it. A command-line model can vote instead
-  (`"verifier": {"type": "cli", ...}`, same shape as the external reviewer,
-  with `{page}` for the archived page); see the run skill.
+  reliability instead of assuming it. The recommended setting is a
+  command-line model through `pi` with the archived page attached (`{page}`),
+  as above: on one question with the same decoys, `gpt-5.6-luna` refuted 9 of
+  10 planted decoys where `haiku` refuted 4 (both caught all 10 softly, neither
+  was fooled), at about a quarter less Claude-side token use. `verifierModel`
+  (a Claude model name) is the shorthand for a Claude verifier.
 - **reviewer** — who adversarially reviews the draft. Default: the session's
   model in a fresh context (a reviewer that never saw the author's reasoning).
 - **planReviewers** — the panel that attacks a plan before launch (an array;
   each entry has the same shape as `reviewer`). Default when absent:
-  `[{ "type": "claude", "model": "inherit" }]`. Append a `codex-cli` entry for
-  a two-model panel — different model families have different blind spots.
+  `[{ "type": "claude", "model": "inherit" }]`. Append a `cli` entry for a
+  two-model panel — different model families have different blind spots.
 
 ### External reviewer (optional)
 
 A second model family can review instead — different models have different
 blind spots. Any command-line agent that reads a prompt from a file works;
-the `pi` coding agent on the Codex subscription is the leanest relay we have
-measured (about 700 tokens of overhead per call):
+the `pi` coding agent on a Codex subscription is the leanest relay we have
+measured (about 700 tokens of overhead per call), and `gpt-6-astra` or
+`gpt-5.6-sol` at high thinking are the reviewers we use:
 
 ```json
 "reviewer": {
@@ -164,21 +178,21 @@ measured (about 700 tokens of overhead per call):
 
 `command` is one line with a `{prompt}` placeholder: the relay replaces it
 with the staged prompt file's path and redirects stdout into `review.md`.
-For the OpenAI Codex CLI use
-`codex exec --skip-git-repo-check --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort=\"high\" - < {prompt}`
-(the legacy `"type": "codex-cli"` with a bare prefix still works). The same
-shape works as a `planReviewers` entry.
+Any other CLI works the same way as long as it takes the prompt by path or
+stdin (for example `codex exec ... - < {prompt}`; the legacy
+`"type": "codex-cli"` with a bare prefix still works). The same shape works
+as a `planReviewers` entry and, with `{page}`, as the `verifier`.
 
 `wrapperModel` sets the relay agent that stages the prompt and runs the CLI
 (default: the worker model): the external model does the reviewing, so the
 relay is deliberately cheap.
 
 Add a matching prefix rule to your permission allowlist (e.g.
-`Bash(pi -p *)` or `Bash(codex exec --skip-git-repo-check --sandbox read-only *)`
-in `.claude/settings.json`) — permission rules are prefix rules, and the
-review call is made non-interactively from a background agent, so an unlisted
-command cannot prompt you and the review degrades to the unreviewed draft.
-Only enable this if the command already works in your environment.
+`Bash(pi -p *)` in `.claude/settings.json`) — permission rules are prefix
+rules, and the review and vote calls are made non-interactively from
+background agents, so an unlisted command cannot prompt you: the review
+degrades to the unreviewed draft and the votes come back as errors. Only
+enable this if the command already works in your environment.
 
 ## Trust model
 
@@ -209,11 +223,14 @@ Vocabulary (ledger, decoy, gate, brief, angle…) is defined in
 
 ## Cost
 
-A run is a multi-agent workflow: expect tens of subagent calls (mostly small,
-cheap models — search/fetch on `sonnet`, votes on `haiku`) plus a handful of
-session-model calls (scope, gap analysis, author/review/adjudicate). `quick`
-depth exists to scope a question cheaply before committing to `deep`. Progress,
-per-agent tokens, and a stop control are in `/workflows`.
+A run is a multi-agent workflow: expect tens of subagent calls (search, fetch,
+and the vote relays on `sonnet`; the votes themselves on the configured
+verifier, which with `pi` run outside Claude Code entirely) plus a handful of
+session-model calls (scope, gap analysis, author/review/adjudicate). Measured
+on one question at `quick` depth: about 2.2M Sonnet-equivalent Claude tokens
+with the `pi` verifier, 3.0M with `haiku` votes; a `standard` run is roughly
+twice that. `quick` depth exists to scope a question cheaply before committing
+to `deep`. Progress, per-agent tokens, and a stop control are in `/workflows`.
 
 ## License
 
