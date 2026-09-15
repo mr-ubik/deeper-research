@@ -47,6 +47,19 @@ instead:
               "wrapperModel": "sonnet" }
 ```
 
+The verifier can also be a command-line model. Replace `verifierModel` with:
+
+```json
+"verifier": { "type": "cli", "label": "gpt-5.6-luna",
+              "command": "pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking low --model openai-codex/gpt-5.6-luna @{prompt} @{page}",
+              "wrapperModel": "sonnet" }
+```
+
+`{page}` is the archived page file, attached by the tool itself, so the relay
+never reads it. Decoy calibration measures a `cli` verifier exactly as it
+measures a Claude one, and the quote gate rechecks its `quote_found` claims
+against the page. Pass the object as `args.verifier` at launch.
+
 `command` is ONE line containing the placeholder `{prompt}`; the relay replaces
 it with the staged prompt file's path and appends a stdout redirect into
 `review.md`. The text before the placeholder must be the exact prefix their
@@ -138,7 +151,8 @@ launch:
   `seedSources` (`[{url, title, localPath}]`, `localPath: ''` unless the user
   gave a local file), `angles` (the locked set from plan.md; omit without a
   plan and the workflow's Scope agent derives them), `blocklist`, `caps` from
-  the depth preset, `workerModel`, `verifierModel`, `reviewer` from config,
+  the depth preset, `workerModel`, `verifierModel` (or the `verifier` object),
+  `reviewer` from config,
   `pipelineVersion` and `templateSha256` from step 3.3, and `sessionModel`
   (the exact model id of this session — informational, recorded so the run
   record names every role's model). `retrievalOff: true` exists only for

@@ -136,7 +136,9 @@ run and hand-editable after:
 - **verifierModel** — the model casting verification votes. A small model works
   well here *because* votes are page-grounded and decoy-calibrated: every run
   reports how often the verifier caught planted-false claims, so you see its
-  reliability instead of assuming it.
+  reliability instead of assuming it. A command-line model can vote instead
+  (`"verifier": {"type": "cli", ...}`, same shape as the external reviewer,
+  with `{page}` for the archived page); see the run skill.
 - **reviewer** — who adversarially reviews the draft. Default: the session's
   model in a fresh context (a reviewer that never saw the author's reasoning).
 - **planReviewers** — the panel that attacks a plan before launch (an array;
