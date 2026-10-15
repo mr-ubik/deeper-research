@@ -46,8 +46,8 @@
 //     sessionModel: informational — the model of the launching session, which
 //                   runs every agent without an explicit model (scope, gap,
 //                   author, review, adjudicate). Recorded, never used ('' ok)
-//     workerModel:  model for search/fetch workers (default 'sonnet')
-//     verifierModel: model casting verification votes (default 'haiku'); shorthand
+//     workerModel:  model for search/fetch workers (default 'opus')
+//     verifierModel: model casting verification votes (default 'opus'); shorthand
 //                   for verifier: { type: 'claude', model }
 //     verifier:     { type: 'claude', model } | { type: 'cli', command, label, wrapperModel }
 //                   A 'cli' verifier casts votes through a command-line model, like
@@ -55,7 +55,7 @@
 //                   (the staged vote prompt file) and {page} (the archived page
 //                   file, attached by the tool itself so the relay never reads it),
 //                   e.g. 'pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking low --model openai-codex/gpt-5.6-luna @{prompt} @{page}'
-//                   wrapperModel = the relay agent (default 'sonnet'). Decoy
+//                   wrapperModel = the relay agent (default 'haiku'). Decoy
 //                   calibration measures a cli verifier exactly as it measures a
 //                   Claude one.
 //     reviewer:     { type: 'claude', model: 'inherit'|<model>, label }
@@ -63,11 +63,11 @@
 //                       command: ONE line containing the placeholder {prompt},
 //                       which the relay replaces with the staged prompt file's
 //                       absolute path, e.g.
-//                         'pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking high --model openai-codex/gpt-5.6-sol @{prompt}'
-//                         'codex exec --skip-git-repo-check --sandbox read-only -m gpt-5.6-sol -c model_reasoning_effort="high" - < {prompt}'
+//                         'pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking high --model openai-codex/gpt-6.1-sol @{prompt}'
+//                         'codex exec --skip-git-repo-check --sandbox read-only -m gpt-6.1-sol -c model_reasoning_effort="high" - < {prompt}'
 //                       wrapperModel: the relay agent that stages the prompt and
-//                       runs the CLI (default = workerModel; the external model
-//                       does the reviewing, the relay is mechanical)
+//                       runs the CLI (default 'haiku'; the external model does
+//                       the reviewing, the relay is mechanical)
 //                   | { type: 'codex-cli', command: <CLI prefix>, label, wrapperModel }
 //                       legacy alias: command has no placeholder and gets
 //                       ' - < {prompt}' appended
@@ -136,13 +136,13 @@ if (!RETRIEVAL_OFF && !(Number.isInteger(VOTES_PER_CLAIM) && VOTES_PER_CLAIM >= 
   throw new Error('caps.votesPerClaim must be an integer >= 1 (use retrievalOff for a control run)')
 }
 const SESSION_MODEL = A.sessionModel || ''
-const WORKER = A.workerModel || 'sonnet'
+const WORKER = A.workerModel || 'opus'
 // Verifier normalization (mirrors the reviewer): the string shorthand
 // verifierModel means a Claude agent; a 'cli' object routes votes through a
 // command-line model. VERIFIER stays the label used in logs and Methodology.
 const VERIFIER_CFG = A.verifier && A.verifier.type === 'cli'
   ? A.verifier
-  : { type: 'claude', model: (A.verifier && A.verifier.model) || A.verifierModel || 'haiku' }
+  : { type: 'claude', model: (A.verifier && A.verifier.model) || A.verifierModel || 'opus' }
 if (VERIFIER_CFG.type === 'cli') {
   if (typeof VERIFIER_CFG.command !== 'string' || !VERIFIER_CFG.command.includes('{prompt}')) {
     throw new Error('args.verifier.command must be a single line containing the {prompt} placeholder (and {page} to attach the archived page)')
@@ -150,7 +150,7 @@ if (VERIFIER_CFG.type === 'cli') {
   if (/[\r\n]/.test(VERIFIER_CFG.command)) throw new Error('args.verifier.command must be a single line')
 }
 const VERIFIER = VERIFIER_CFG.type === 'cli' ? `cli:${VERIFIER_CFG.label || 'external'}` : VERIFIER_CFG.model
-const VOTE_RELAY_MODEL = VERIFIER_CFG.wrapperModel || 'sonnet'
+const VOTE_RELAY_MODEL = VERIFIER_CFG.wrapperModel || 'haiku'
 // Reviewer normalization: 'codex-cli' is the legacy spelling of a 'cli'
 // reviewer whose prompt goes to stdin. After this block REVIEWER.type is
 // 'claude' or 'cli', and a 'cli' command always carries the {prompt} placeholder.
@@ -170,7 +170,7 @@ if (REVIEWER.type === 'cli') {
 }
 const REVIEWER_LABEL = REVIEWER.label ||
   (REVIEWER.type === 'cli' ? 'an external reviewer model' : 'an independent Claude reviewer')
-const RELAY_MODEL = REVIEWER.wrapperModel || WORKER
+const RELAY_MODEL = REVIEWER.wrapperModel || 'haiku'
 const DECOY_CLAIMS = A.decoys
 // Plugin-provided agent types are namespaced by the plugin name in the
 // session's registry.

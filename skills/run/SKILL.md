@@ -27,8 +27,8 @@ which reviewer and default depth they want, then write the file:
 ```json
 {
   "runsDir": "research",
-  "workerModel": "sonnet",
-  "verifierModel": "haiku",
+  "workerModel": "opus",
+  "verifierModel": "opus",
   "reviewer": { "type": "claude", "model": "inherit" },
   "depth": "standard",
   "blocklist": []
@@ -42,9 +42,9 @@ fresh context. Users with a command-line agent for a second model family (the
 instead:
 
 ```json
-"reviewer": { "type": "cli", "label": "gpt-5.6-sol",
-              "command": "pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking high --model openai-codex/gpt-5.6-sol @{prompt}",
-              "wrapperModel": "sonnet" }
+"reviewer": { "type": "cli", "label": "gpt-6.1-sol",
+              "command": "pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking high --model openai-codex/gpt-6.1-sol @{prompt}",
+              "wrapperModel": "haiku" }
 ```
 
 The verifier can also be a command-line model. Replace `verifierModel` with:
@@ -52,7 +52,7 @@ The verifier can also be a command-line model. Replace `verifierModel` with:
 ```json
 "verifier": { "type": "cli", "label": "gpt-5.6-luna",
               "command": "pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking low --model openai-codex/gpt-5.6-luna @{prompt} @{page}",
-              "wrapperModel": "sonnet" }
+              "wrapperModel": "haiku" }
 ```
 
 `{page}` is the archived page file, attached by the tool itself, so the relay
@@ -66,8 +66,8 @@ it with the staged prompt file's path and appends a stdout redirect into
 permission allowlist matches (see README → External reviewer). For the Codex
 CLI the command is `codex exec --skip-git-repo-check --sandbox read-only -m <model> -c model_reasoning_effort=\"high\" - < {prompt}`;
 the legacy `"type": "codex-cli"` with a bare prefix still works and gets the
-stdin form appended. `wrapperModel` (default: the worker model) is the relay
-agent that stages the prompt and runs the CLI — the external model does the
+stdin form appended. `wrapperModel` (default: `haiku`) is the relay agent
+that stages the prompt and runs the CLI — the external model does the
 reviewing, so the relay is deliberately cheap. Never select a `cli` reviewer
 for a user who hasn't confirmed the command works in their environment.
 

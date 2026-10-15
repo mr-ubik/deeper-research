@@ -103,9 +103,9 @@ explicitly" — an invented finding is worse than none.
   the model override). They may WebFetch URL seeds directly.
 - `cli` reviewers (and legacy `codex-cli`): write the prompt (with inline
   file paths) to a uniquely named file in the run folder yourself, then spawn
-  a relay subagent on the entry's `wrapperModel` (default: the worker model —
-  the external model does the reviewing, so the relay never runs on the
-  session model), name prefixed `[codex]` when the command is `codex`, else
+  a relay subagent on the entry's `wrapperModel` (default: `haiku` — the
+  external model does the reviewing and the relay only runs one command, so
+  it never runs on the session model), name prefixed `[codex]` when the command is `codex`, else
   `[cli]`. Its ONLY job: run the entry's `command` with `{prompt}` replaced
   by the prompt file's path (for `codex-cli` append ` - < <file>`), with
   ` > <run folder>/plan-review-<label>.md 2>/dev/null` appended, as ONE Bash

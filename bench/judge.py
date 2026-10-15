@@ -25,7 +25,7 @@ def main(argv=None):
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--out-text", required=True)
     parser.add_argument("--out-json", required=True)
-    parser.add_argument("--model", default="openai-codex/gpt-5.6-sol")
+    parser.add_argument("--model", default="openai-codex/gpt-6.1-sol")
     parser.add_argument("--thinking", default="high")
     parser.add_argument("--timeout", type=float, default=900)
     args = parser.parse_args(argv)
