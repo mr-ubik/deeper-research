@@ -44,7 +44,12 @@ workflow template.
   with verified claims (with votes) and an unverified tail. The only evidence
   base synthesis may draw from. Decoys never enter it.
 - **Verifier** — the model casting per-claim support votes, page-grounded
-  (reads the archived page, checks the quote is present).
+  (reads the archived page, checks the quote is present). Either a Claude
+  agent or a command-line model reached through a vote relay.
+- **Vote relay** — the cheap agent that stages a vote batch for a
+  command-line verifier: writes the prompt, runs one command that attaches
+  the prompt and the archived page by path, returns the JSON the verifier
+  wrote. It never reads the page and never judges.
 - **Vote** — one verifier judgment on one claim: verdict + `quote_found`.
 - **Decoy** — a known-false, in-domain claim with a fabricated quote, injected
   into verification to measure the verifier. Detection tallies: **strict**
