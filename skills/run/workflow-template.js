@@ -66,9 +66,8 @@
 //                         'pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking high --model openai-codex/gpt-6.1-sol @{prompt}'
 //                         'codex exec --skip-git-repo-check --sandbox read-only -m gpt-6.1-sol -c model_reasoning_effort="high" - < {prompt}'
 //                       wrapperModel: the relay agent that stages the prompt and
-//                       runs the CLI (default = workerModel; the external model
-//                       does the reviewing, but the relay re-types the draft and
-//                       ledger into the prompt file, so it is not a small-model job)
+//                       runs the CLI (default 'haiku'; the external model does
+//                       the reviewing, the relay is mechanical)
 //                   | { type: 'codex-cli', command: <CLI prefix>, label, wrapperModel }
 //                       legacy alias: command has no placeholder and gets
 //                       ' - < {prompt}' appended
@@ -171,7 +170,7 @@ if (REVIEWER.type === 'cli') {
 }
 const REVIEWER_LABEL = REVIEWER.label ||
   (REVIEWER.type === 'cli' ? 'an external reviewer model' : 'an independent Claude reviewer')
-const RELAY_MODEL = REVIEWER.wrapperModel || WORKER
+const RELAY_MODEL = REVIEWER.wrapperModel || 'haiku'
 const DECOY_CLAIMS = A.decoys
 // Plugin-provided agent types are namespaced by the plugin name in the
 // session's registry.

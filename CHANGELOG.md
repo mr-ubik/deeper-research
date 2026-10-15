@@ -14,11 +14,11 @@ to v0.3.2-default runs without pinning the models: the defaults changed.
   cheaper default.
 - **Vote relay default (`cli` verifier `wrapperModel`): `sonnet` → `haiku`.**
   The relay only runs one command with the page attached by path.
-- **Plan-review relay default (`cli` plan reviewer `wrapperModel`): worker
-  model → `haiku`.** The session writes the prompt file; the relay only runs
-  the command.
-- The draft-review relay still defaults to the worker model (now Opus): it
-  copies the draft and evidence ledger into the prompt file verbatim.
+- **Reviewer relay defaults (`cli` draft and plan reviewer `wrapperModel`):
+  worker model → `haiku`.** The relays are mechanical; the external model
+  does the reviewing.
+- **Benchmark judge default (`bench/judge.py --model`): GPT-5.6-sol →
+  GPT-6.1-sol.** No verdicts had been scored with the old judge.
 - Reviewer examples use GPT-6.1-sol (`openai-codex/gpt-6.1-sol`) instead of
   GPT-5.6-sol.
 

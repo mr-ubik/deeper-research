@@ -125,8 +125,8 @@ Every role and the model it runs on by default:
 | Verification votes | Opus (`opus`) | `verifierModel`, or a `verifier` object |
 | Draft reviewer | the session model, in a fresh context | `reviewer` |
 | Plan reviewers | the session model, in a fresh context | `planReviewers` |
-| Relay for a `cli` draft reviewer | the worker model | `reviewer.wrapperModel` |
-| Relay for a `cli` plan reviewer or `cli` verifier | Haiku (`haiku`) | `wrapperModel` on that entry |
+| Relay for any `cli` reviewer or verifier | Haiku (`haiku`) | `wrapperModel` on that entry |
+| Benchmark judge (`bench/judge.py`) | GPT-6.1-sol (`openai-codex/gpt-6.1-sol`) via `pi` | `--model` |
 
 Our own setup adds a second model family through the `pi` coding agent:
 GPT-6.1-sol (`openai-codex/gpt-6.1-sol`) as the draft reviewer, GPT-6-astra
@@ -180,7 +180,7 @@ measured (about 700 tokens of overhead per call):
   "type": "cli",
   "label": "gpt-6.1-sol",
   "command": "pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking high --model openai-codex/gpt-6.1-sol @{prompt}",
-  "wrapperModel": "opus"
+  "wrapperModel": "haiku"
 }
 ```
 
@@ -191,11 +191,9 @@ For the OpenAI Codex CLI use
 (the legacy `"type": "codex-cli"` with a bare prefix still works). The same
 shape works as a `planReviewers` entry.
 
-`wrapperModel` sets the relay agent that stages the prompt and runs the CLI.
-For the draft reviewer it defaults to the worker model: the relay copies the
-draft and the evidence ledger into the prompt file verbatim, which a small
-model can truncate. Plan-review and vote relays only run one command and
-default to `haiku`.
+`wrapperModel` sets the relay agent that stages the prompt and runs the CLI
+(default: `haiku`): the external model does the reviewing, so the relay is
+deliberately cheap.
 
 Add a matching prefix rule to your permission allowlist (e.g.
 `Bash(pi -p *)` or `Bash(codex exec --skip-git-repo-check --sandbox read-only *)`

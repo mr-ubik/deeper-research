@@ -44,7 +44,7 @@ instead:
 ```json
 "reviewer": { "type": "cli", "label": "gpt-6.1-sol",
               "command": "pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking high --model openai-codex/gpt-6.1-sol @{prompt}",
-              "wrapperModel": "opus" }
+              "wrapperModel": "haiku" }
 ```
 
 The verifier can also be a command-line model. Replace `verifierModel` with:
@@ -66,11 +66,9 @@ it with the staged prompt file's path and appends a stdout redirect into
 permission allowlist matches (see README → External reviewer). For the Codex
 CLI the command is `codex exec --skip-git-repo-check --sandbox read-only -m <model> -c model_reasoning_effort=\"high\" - < {prompt}`;
 the legacy `"type": "codex-cli"` with a bare prefix still works and gets the
-stdin form appended. `wrapperModel` (default: the worker model) is the relay
-agent that stages the prompt and runs the CLI — the external model does the
-reviewing, but the relay copies the draft and ledger into the prompt file
-verbatim, so keep it on the worker model. The vote relay only runs a command
-(default `haiku`). Never select a `cli` reviewer
+stdin form appended. `wrapperModel` (default: `haiku`) is the relay agent
+that stages the prompt and runs the CLI — the external model does the
+reviewing, so the relay is deliberately cheap. Never select a `cli` reviewer
 for a user who hasn't confirmed the command works in their environment.
 
 Depth presets (a config `caps` object with the same keys as the template's
