@@ -27,8 +27,8 @@ which reviewer and default depth they want, then write the file:
 ```json
 {
   "runsDir": "research",
-  "workerModel": "sonnet",
-  "verifierModel": "haiku",
+  "workerModel": "opus",
+  "verifierModel": "opus",
   "reviewer": { "type": "claude", "model": "inherit" },
   "depth": "standard",
   "blocklist": []
@@ -42,9 +42,9 @@ fresh context. Users with a command-line agent for a second model family (the
 instead:
 
 ```json
-"reviewer": { "type": "cli", "label": "gpt-5.6-sol",
-              "command": "pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking high --model openai-codex/gpt-5.6-sol @{prompt}",
-              "wrapperModel": "sonnet" }
+"reviewer": { "type": "cli", "label": "gpt-6.1-sol",
+              "command": "pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking high --model openai-codex/gpt-6.1-sol @{prompt}",
+              "wrapperModel": "opus" }
 ```
 
 The verifier can also be a command-line model. Replace `verifierModel` with:
@@ -52,7 +52,7 @@ The verifier can also be a command-line model. Replace `verifierModel` with:
 ```json
 "verifier": { "type": "cli", "label": "gpt-5.6-luna",
               "command": "pi -p --no-tools --no-session --no-context-files --no-skills --no-extensions --no-prompt-templates --thinking low --model openai-codex/gpt-5.6-luna @{prompt} @{page}",
-              "wrapperModel": "sonnet" }
+              "wrapperModel": "haiku" }
 ```
 
 `{page}` is the archived page file, attached by the tool itself, so the relay
@@ -68,7 +68,9 @@ CLI the command is `codex exec --skip-git-repo-check --sandbox read-only -m <mod
 the legacy `"type": "codex-cli"` with a bare prefix still works and gets the
 stdin form appended. `wrapperModel` (default: the worker model) is the relay
 agent that stages the prompt and runs the CLI — the external model does the
-reviewing, so the relay is deliberately cheap. Never select a `cli` reviewer
+reviewing, but the relay copies the draft and ledger into the prompt file
+verbatim, so keep it on the worker model. The vote relay only runs a command
+(default `haiku`). Never select a `cli` reviewer
 for a user who hasn't confirmed the command works in their environment.
 
 Depth presets (a config `caps` object with the same keys as the template's
